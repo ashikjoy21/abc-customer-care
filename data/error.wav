@@ -1,0 +1,37 @@
+// This is a binary file, so I'll create it programmatically using the TTS service
+
+import os
+from google.cloud import texttospeech
+from google.oauth2 import service_account
+
+# Initialize TTS client
+credentials = service_account.Credentials.from_service_account_file(
+    os.getenv("GCP_CREDENTIALS_PATH", "gcp_key.json"),
+    scopes=["https://www.googleapis.com/auth/cloud-platform"]
+)
+tts_client = texttospeech.TextToSpeechClient(credentials=credentials)
+
+# Create error message audio
+input_text = texttospeech.SynthesisInput(
+    text="ക്ഷമിക്കണം, എന്തോ പിശക് സംഭവിച്ചു. വീണ്ടും ശ്രമിക്കുക."
+)
+voice = texttospeech.VoiceSelectionParams(
+    language_code="ml-IN",
+    name="ml-IN-Standard-A",
+    ssml_gender=texttospeech.SsmlVoiceGender.FEMALE
+)
+audio_config = texttospeech.AudioConfig(
+    audio_encoding=texttospeech.AudioEncoding.MULAW,
+    sample_rate_hertz=8000,
+    effects_profile_id=["telephony-class-application"]
+)
+
+response = tts_client.synthesize_speech(
+    input=input_text,
+    voice=voice,
+    audio_config=audio_config
+)
+
+# Save the audio file
+with open("error.wav", "wb") as f:
+    f.write(response.audio_content) 

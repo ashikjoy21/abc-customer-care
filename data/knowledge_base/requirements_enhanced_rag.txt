@@ -1,0 +1,36 @@
+# Core dependencies
+numpy>=1.20.0
+sentence-transformers>=2.2.2
+faiss-cpu>=1.7.4  # Use faiss-gpu for GPU support
+
+# Fix protobuf compatibility issue
+protobuf==3.20.0
+
+# Vector database alternatives - simplified
+# Use only one of these based on your preference
+# chromadb dependencies have been removed to avoid conflicts
+# Uncomment the one you want to use
+# chromadb==0.4.6
+# weaviate-client==3.15.4
+# pinecone-client==2.2.1
+
+# Redis for caching (optional)
+redis>=4.5.1
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.65.0
+pandas>=1.5.3
+pydantic>=2.0.0
+
+# Monitoring - simplified
+# prometheus-client>=0.16.0
+# grafana-api>=1.0.3
+
+# Web server (for API)
+fastapi>=0.95.0
+uvicorn>=0.22.0
+
+# Testing
+pytest>=7.3.1
+pytest-asyncio>=0.21.0 
