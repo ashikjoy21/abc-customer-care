@@ -1,0 +1,30 @@
+[Unit]
+Description=Exotel Bot Service
+After=network.target redis.service
+Wants=redis.service
+
+[Service]
+User=exotelbot
+Group=exotelbot
+WorkingDirectory=/home/exotelbot/abc-angamaly
+ExecStart=/home/exotelbot/abc-angamaly/venv/bin/python main_enhanced.py --host 0.0.0.0 --port 8080
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=exotelbot
+Environment="PATH=/home/exotelbot/abc-angamaly/venv/bin"
+Environment="PYTHONUNBUFFERED=1"
+
+# Limit resource usage
+CPUQuota=90%
+MemoryLimit=4G
+
+# Security measures
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target 

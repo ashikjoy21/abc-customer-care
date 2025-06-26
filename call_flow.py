@@ -2077,13 +2077,40 @@ async def handle_client(websocket):
 
 async def main():
     """Start the voicebot server"""
-    try:
-        async with websockets.serve(handle_client, "localhost", 8765):
-            logger.info("🚀 Voicebot server started on ws://localhost:8765")
+    max_retries = 5
+    retry_count = 0
+    retry_delay = 5  # seconds
+    
+    while retry_count < max_retries:
+        try:
+            server = await websockets.serve(
+                handle_client, 
+                "0.0.0.0", 
+                8080,
+                max_size=10 * 1024 * 1024,  # 10MB max message size
+                ping_interval=30,           # Send ping every 30 seconds
+                ping_timeout=10,            # Wait 10 seconds for pong response
+                close_timeout=10            # Wait 10 seconds for close handshake
+            )
+            
+            logger.info("🚀 Voicebot server started on ws://0.0.0.0:8080")
             await asyncio.Future()  # run forever
-    except Exception as e:
-        logger.error(f"Error starting server: {e}")
-        raise 
+            
+        except OSError as e:
+            retry_count += 1
+            logger.error(f"Failed to start server (attempt {retry_count}/{max_retries}): {e}")
+            
+            if retry_count < max_retries:
+                logger.info(f"Retrying in {retry_delay} seconds...")
+                await asyncio.sleep(retry_delay)
+                # Exponential backoff for retry delay
+                retry_delay = min(retry_delay * 2, 60)  # Cap at 60 seconds
+            else:
+                logger.critical(f"Failed to start server after {max_retries} attempts")
+                raise
+        except Exception as e:
+            logger.error(f"Error starting server: {e}")
+            raise
 
 if __name__ == "__main__":
     # Test the extract_technical_terms function
