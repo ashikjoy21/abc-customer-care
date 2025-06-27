@@ -60,10 +60,10 @@ psutil==5.9.5
 prometheus-client==0.17.1
 gunicorn==21.2.0
 supervisor==4.2.5
-uvicorn==0.23.2
+uvicorn>=0.23.2
 # Production dependencies
 psutil==5.9.5
 prometheus-client==0.17.1
 gunicorn==21.2.0
 supervisor==4.2.5
-uvicorn==0.23.2
+uvicorn>=0.23.2
