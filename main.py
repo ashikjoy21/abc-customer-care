@@ -1,20 +1,16 @@
 import asyncio
 import logging
 from typing import Optional
-import redis
 from loguru import logger
 
 from config import (
-    REDIS_HOST,
-    REDIS_PORT,
-    REDIS_DB,
     LOG_LEVEL,
     LOG_FORMAT
 )
 from db import CustomerDatabaseManager
 from telegram_notifier import TelegramBotManager
 from call_flow import main as start_voicebot
-from utils import check_redis
+from supabase_client import SupabaseManager
 
 # Configure logging
 logger.remove()  # Remove default handler
@@ -31,25 +27,18 @@ class Application:
     """Main application class"""
     
     def __init__(self):
-        self.redis_client: Optional[redis.Redis] = None
+        self.supabase_manager = SupabaseManager()
         self.db: Optional[CustomerDatabaseManager] = None
         self.telegram_bot: Optional[TelegramBotManager] = None
         
     async def initialize(self):
-        """Initialize application components"""
+        """Initialize all components"""
         try:
-            # Initialize Redis
-            self.redis_client = redis.Redis(
-                host=REDIS_HOST,
-                port=REDIS_PORT,
-                db=REDIS_DB,
-                decode_responses=True
-            )
+            # Check Supabase connection
+            if not self.supabase_manager.check_connection():
+                logger.error("❌ Failed to connect to Supabase")
+                return False
             
-            # Check Redis connection
-            if not check_redis(self.redis_client):
-                raise Exception("Failed to connect to Redis")
-                
             # Initialize database
             self.db = CustomerDatabaseManager()
             self.db.load_from_json()
@@ -58,11 +47,12 @@ class Application:
             self.telegram_bot = TelegramBotManager()
             await self.telegram_bot.start()
             
-            logger.info("✅ Application initialized successfully")
+            logger.info("✅ All components initialized successfully")
+            return True
             
         except Exception as e:
-            logger.error(f"Failed to initialize application: {e}")
-            raise
+            logger.error(f"❌ Failed to initialize components: {e}")
+            return False
             
     async def shutdown(self):
         """Shutdown application components"""
@@ -70,8 +60,8 @@ class Application:
             if self.telegram_bot:
                 await self.telegram_bot.stop()
                 
-            if self.redis_client:
-                self.redis_client.close()
+            if self.supabase_manager:
+                self.supabase_manager.close()
                 
             logger.info("👋 Application shutdown complete")
             
