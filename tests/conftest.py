@@ -1,13 +1,15 @@
 import pytest
-import redis
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 
 @pytest.fixture(scope="session")
-def mock_redis():
-    """Mock Redis client"""
-    with patch('redis.Redis') as mock:
-        client = Mock(spec=redis.Redis)
-        client.ping.return_value = True
+def mock_supabase():
+    """Mock Supabase client"""
+    with patch('supabase_client.supabase_manager') as mock:
+        client = Mock()
+        client.check_connection.return_value = True
+        client.get_active_incidents.return_value = []
+        client.resolve_incident.return_value = True
+        client.create_incident.return_value = "test-incident-id"
         mock.return_value = client
         yield client
 
@@ -37,21 +39,13 @@ def mock_gemini():
         mock.return_value = model
         yield chat
 
-@pytest.fixture(scope="session")
-def mock_telegram_bot():
-    """Mock Telegram bot"""
-    with patch('telegram_notifier.TelegramBotManager') as mock:
-        bot = Mock()
-        mock.return_value = bot
-        yield bot
-
-@pytest.fixture(scope="session")
+@pytest.fixture
 def mock_db():
-    """Mock customer database"""
+    """Mock database"""
     with patch('db.CustomerDatabaseManager') as mock:
-        db = Mock()
-        mock.return_value = db
-        yield db
+        mock_instance = MagicMock()
+        mock.return_value = mock_instance
+        yield mock_instance
 
 @pytest.fixture(scope="session")
 def mock_query_engine():

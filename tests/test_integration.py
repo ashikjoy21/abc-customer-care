@@ -20,7 +20,6 @@ class TestIntegration(unittest.TestCase):
         """Set up test environment"""
         # Create mocks for dependencies
         self.mock_db = MagicMock()
-        self.mock_telegram_bot = MagicMock()
         self.mock_websocket = AsyncMock()
         
         # Create a mock for the text_to_speech function
@@ -34,7 +33,6 @@ class TestIntegration(unittest.TestCase):
         # Set up the bot with mocks
         self.bot = ExotelBotEnhanced()
         self.bot.db = self.mock_db
-        self.bot.telegram_bot = self.mock_telegram_bot
         self.bot.websocket = self.mock_websocket
         
         # Mock the troubleshooting engine
@@ -209,16 +207,12 @@ class TestIntegration(unittest.TestCase):
             "steps_failed": 2
         })
         
-        # Mock telegram bot
-        self.bot.telegram_bot.send_message = AsyncMock()
-        
         # Call _send_call_summary
         await self.bot._send_call_summary()
         
         # Verify
         self.bot.call_memory.generate_summary.assert_called_once()
         self.bot.call_memory.get_troubleshooting_summary.assert_called_once()
-        self.bot.telegram_bot.send_message.assert_called_once()
 
 
 if __name__ == "__main__":

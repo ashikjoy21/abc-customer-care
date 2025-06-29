@@ -8,7 +8,6 @@ from config import (
     LOG_FORMAT
 )
 from db import CustomerDatabaseManager
-from telegram_notifier import TelegramBotManager
 from call_flow import main as start_voicebot
 from supabase_client import SupabaseManager
 
@@ -29,7 +28,6 @@ class Application:
     def __init__(self):
         self.supabase_manager = SupabaseManager()
         self.db: Optional[CustomerDatabaseManager] = None
-        self.telegram_bot: Optional[TelegramBotManager] = None
         
     async def initialize(self):
         """Initialize all components"""
@@ -43,10 +41,6 @@ class Application:
             self.db = CustomerDatabaseManager()
             self.db.load_from_json()
             
-            # Initialize Telegram bot
-            self.telegram_bot = TelegramBotManager()
-            await self.telegram_bot.start()
-            
             logger.info("✅ All components initialized successfully")
             return True
             
@@ -57,9 +51,6 @@ class Application:
     async def shutdown(self):
         """Shutdown application components"""
         try:
-            if self.telegram_bot:
-                await self.telegram_bot.stop()
-                
             if self.supabase_manager:
                 self.supabase_manager.close()
                 

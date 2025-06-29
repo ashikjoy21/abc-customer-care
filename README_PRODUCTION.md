@@ -8,6 +8,7 @@ This guide provides instructions for deploying the Exotel Bot on a Google Cloud 
 - At least 4GB RAM (8GB recommended)
 - At least 20GB disk space
 - Python 3.8 or newer
+- Supabase project for data storage
 
 ## Setup Instructions
 
@@ -55,7 +56,9 @@ This guide provides instructions for deploying the Exotel Bot on a Google Cloud 
    Update the following values:
    ```
    WEBHOOK_URL="https://your-domain.com"
-   REDIS_HOST="localhost"
+   SUPABASE_URL="your-supabase-project-url"
+   SUPABASE_KEY="your-supabase-service-role-key"
+   SUPABASE_ANON_KEY="your-supabase-anon-key"
    GEMINI_API_KEY="your-api-key"
    ```
 
@@ -85,11 +88,11 @@ This guide provides instructions for deploying the Exotel Bot on a Google Cloud 
    tail -f /home/exotelbot/abc-angamaly/logs/app.log
    ```
 
-3. Test the WebSocket connection:
+3. Test the Supabase connection:
    ```
-   curl -i -N -H "Connection: Upgrade" -H "Upgrade: websocket" \
-     -H "Host: your-domain.com" -H "Origin: http://your-domain.com" \
-     https://your-domain.com
+   cd /home/exotelbot/abc-angamaly
+   source venv/bin/activate
+   python -c "from supabase_client import check_supabase; print('Supabase connected:', check_supabase())"
    ```
 
 ## Monitoring and Maintenance
@@ -165,7 +168,7 @@ Adjust these values in `main_enhanced.py` if needed.
 
 ## Troubleshooting
 
-### Service Won't Start
+### Service Issues
 
 1. Check for errors:
    ```
@@ -177,9 +180,11 @@ Adjust these values in `main_enhanced.py` if needed.
    /home/exotelbot/abc-angamaly/venv/bin/pip list
    ```
 
-3. Check Redis connection:
+3. Check Supabase connection:
    ```
-   redis-cli ping
+   cd /home/exotelbot/abc-angamaly
+   source venv/bin/activate
+   python -c "from supabase_client import check_supabase; print(check_supabase())"
    ```
 
 ### WebSocket Connection Issues
@@ -220,7 +225,7 @@ Adjust these values in `main_enhanced.py` if needed.
 1. Set up automated backups for:
    - Customer data: `/home/exotelbot/abc-angamaly/data/customers`
    - Call sessions: `/home/exotelbot/abc-angamaly/data/call_sessions`
-   - Redis data: `/var/lib/redis/dump.rdb`
+   - Supabase data: Use Supabase's built-in backup features
 
 2. Example backup script:
    ```bash
@@ -228,7 +233,6 @@ Adjust these values in `main_enhanced.py` if needed.
    BACKUP_DIR="/backups/exotelbot/$(date +%Y%m%d)"
    mkdir -p $BACKUP_DIR
    cp -r /home/exotelbot/abc-angamaly/data $BACKUP_DIR/
-   cp /var/lib/redis/dump.rdb $BACKUP_DIR/
    ```
 
 ## Scaling Considerations
@@ -236,5 +240,5 @@ Adjust these values in `main_enhanced.py` if needed.
 For higher load scenarios:
 1. Increase VM resources (CPU/RAM)
 2. Set up multiple instances behind a load balancer
-3. Move Redis to a managed service
+3. Use Supabase's built-in scaling features
 4. Implement a distributed task queue for processing 

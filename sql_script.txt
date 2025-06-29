@@ -1,0 +1,197 @@
+-- Complete database setup script for ABC ISP Dashboard
+-- Run this script in your Supabase SQL Editor
+
+-- Drop existing tables if they exist (for clean setup)
+DROP TABLE IF EXISTS public.audit_logs CASCADE;
+DROP TABLE IF EXISTS public.activity_feed CASCADE;
+DROP TABLE IF EXISTS public.escalations CASCADE;
+DROP TABLE IF EXISTS public.recharge_queue CASCADE;
+DROP TABLE IF EXISTS public.incidents CASCADE;
+DROP TABLE IF EXISTS public.payments CASCADE;
+DROP TABLE IF EXISTS public.customers CASCADE;
+
+-- Create customers table
+CREATE TABLE public.customers (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  name TEXT NOT NULL,
+  phone TEXT NOT NULL UNIQUE,
+  email TEXT,
+  area TEXT NOT NULL,
+  address TEXT,
+  plan_type TEXT NOT NULL,
+  plan_speed INTEGER,
+  monthly_fee DECIMAL(10,2),
+  installation_date DATE,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'suspended', 'terminated')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create payments table
+CREATE TABLE public.payments (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  customer_id UUID REFERENCES public.customers(id) ON DELETE CASCADE,
+  amount DECIMAL(10,2) NOT NULL,
+  due_date DATE NOT NULL,
+  paid_date DATE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'paid', 'overdue', 'cancelled')),
+  payment_method TEXT,
+  marked_by UUID REFERENCES auth.users(id),
+  marked_at TIMESTAMP WITH TIME ZONE,
+  notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create incidents table
+CREATE TABLE public.incidents (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  area TEXT NOT NULL,
+  issue_type TEXT NOT NULL,
+  description TEXT,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'in_progress', 'resolved')),
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'critical')),
+  reported_by UUID REFERENCES auth.users(id),
+  assigned_to UUID REFERENCES auth.users(id),
+  reported_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  resolved_at TIMESTAMP WITH TIME ZONE,
+  affected_users INTEGER DEFAULT 0,
+  estimated_resolution TIMESTAMP WITH TIME ZONE,
+  resolution_notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create recharge_queue table
+CREATE TABLE public.recharge_queue (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  customer_id UUID REFERENCES public.customers(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed', 'failed')),
+  requested_by UUID REFERENCES auth.users(id),
+  assigned_to UUID REFERENCES auth.users(id),
+  requested_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  completed_at TIMESTAMP WITH TIME ZONE,
+  notes TEXT,
+  priority TEXT DEFAULT 'normal' CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create escalations table
+CREATE TABLE public.escalations (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  customer_id UUID REFERENCES public.customers(id) ON DELETE CASCADE,
+  issue_type TEXT NOT NULL,
+  description TEXT NOT NULL,
+  priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high', 'critical')),
+  status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'in_progress', 'resolved', 'closed')),
+  escalated_by UUID REFERENCES auth.users(id),
+  assigned_to UUID REFERENCES auth.users(id),
+  escalated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  resolved_at TIMESTAMP WITH TIME ZONE,
+  resolution_notes TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create audit_logs table
+CREATE TABLE public.audit_logs (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id),
+  action TEXT NOT NULL,
+  table_name TEXT NOT NULL,
+  record_id UUID,
+  old_values JSONB,
+  new_values JSONB,
+  ip_address INET,
+  user_agent TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Create activity_feed table
+CREATE TABLE public.activity_feed (
+  id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id),
+  action_type TEXT NOT NULL,
+  description TEXT NOT NULL,
+  metadata JSONB,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+/*
+-- Enable Row Level Security
+ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.recharge_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.escalations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.activity_feed ENABLE ROW LEVEL SECURITY;
+
+-- Create RLS policies
+CREATE POLICY "Authenticated users can view customers" ON public.customers FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can insert customers" ON public.customers FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can update customers" ON public.customers FOR UPDATE USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated users can view payments" ON public.payments FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can insert payments" ON public.payments FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can update payments" ON public.payments FOR UPDATE USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated users can view incidents" ON public.incidents FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can create incidents" ON public.incidents FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can update incidents" ON public.incidents FOR UPDATE USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated users can view recharge queue" ON public.recharge_queue FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can create recharge entries" ON public.recharge_queue FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can update recharge entries" ON public.recharge_queue FOR UPDATE USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Authenticated users can view escalations" ON public.escalations FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can insert escalations" ON public.escalations FOR INSERT WITH CHECK (auth.uid() IS NOT NULL);
+CREATE POLICY "Authenticated users can update escalations" ON public.escalations FOR UPDATE USING (auth.uid() IS NOT NULL);
+
+CREATE POLICY "Users can view audit logs" ON public.audit_logs FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "System can insert audit logs" ON public.audit_logs FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Authenticated users can view activity feed" ON public.activity_feed FOR SELECT USING (auth.uid() IS NOT NULL);
+CREATE POLICY "System can insert activity feed" ON public.activity_feed FOR INSERT WITH CHECK (true);
+*/
+-- Insert sample data
+INSERT INTO public.customers (name, phone, email, area, address, plan_type, plan_speed, monthly_fee, installation_date, status) VALUES
+('Fathima Rasheed', '9876543210', 'fathima@email.com', 'Angamaly', 'House No. 123, Main Road, Angamaly', 'Fiber 100', 100, 999.00, '2023-06-15', 'active'),
+('Shajahan Ali', '9876543211', 'shajahan@email.com', 'Kochi', 'Flat 4B, Marina Apartments, Kochi', 'Fiber 50', 50, 699.00, '2023-07-20', 'active'),
+('Priya Nair', '9876543212', 'priya@email.com', 'Mannapuram', 'Villa 12, Green Valley, Mannapuram', 'Fiber 200', 200, 1499.00, '2023-05-10', 'active'),
+('Ravi Kumar', '9876543213', 'ravi@email.com', 'Angamaly', 'Shop No. 45, Business Complex, Angamaly', 'Fiber 150', 150, 1199.00, '2023-08-05', 'active'),
+('Abdul Rahman', '9876543214', 'abdul@email.com', 'Kochi', 'House No. 67, Seaside Colony, Kochi', 'Fiber 100', 100, 999.00, '2023-04-12', 'active'),
+('Meera Thomas', '9876543215', 'meera@email.com', 'Mannapuram', 'Apartment 3A, Hill View, Mannapuram', 'Fiber 75', 75, 799.00, '2023-09-18', 'active'),
+('Rajesh Kumar', '9876543216', 'rajesh@email.com', 'Perumbavoor', 'House No. 89, Temple Street, Perumbavoor', 'Fiber 100', 100, 999.00, '2023-03-25', 'active');
+
+INSERT INTO public.payments (customer_id, amount, due_date, status) VALUES
+((SELECT id FROM public.customers WHERE phone = '9876543210'), 999.00, CURRENT_DATE, 'pending'),
+((SELECT id FROM public.customers WHERE phone = '9876543211'), 699.00, CURRENT_DATE + INTERVAL '1 day', 'pending'),
+((SELECT id FROM public.customers WHERE phone = '9876543212'), 1499.00, CURRENT_DATE, 'pending'),
+((SELECT id FROM public.customers WHERE phone = '9876543213'), 1199.00, CURRENT_DATE + INTERVAL '1 day', 'pending'),
+((SELECT id FROM public.customers WHERE phone = '9876543214'), 999.00, CURRENT_DATE - INTERVAL '2 days', 'overdue'),
+((SELECT id FROM public.customers WHERE phone = '9876543215'), 799.00, CURRENT_DATE + INTERVAL '2 days', 'pending'),
+((SELECT id FROM public.customers WHERE phone = '9876543216'), 999.00, CURRENT_DATE - INTERVAL '1 day', 'overdue');
+
+INSERT INTO public.incidents (area, issue_type, description, status, priority, affected_users) VALUES
+('Mannapuram', 'Fiber Cut', 'Main fiber cable damaged near bus stand', 'active', 'high', 45),
+('Kochi', 'Power Outage', 'Power supply restored after maintenance', 'resolved', 'medium', 12),
+('Angamaly', 'Equipment Failure', 'Router malfunction at distribution point', 'active', 'high', 23);
+
+INSERT INTO public.recharge_queue (customer_id, status, priority) VALUES
+((SELECT id FROM public.customers WHERE phone = '9876543211'), 'pending', 'normal'),
+((SELECT id FROM public.customers WHERE phone = '9876543213'), 'pending', 'normal'),
+((SELECT id FROM public.customers WHERE phone = '9876543215'), 'pending', 'high');
+
+INSERT INTO public.escalations (customer_id, issue_type, description, priority, status) VALUES
+((SELECT id FROM public.customers WHERE phone = '9876543214'), 'Service Issue', 'Internet not working for 2 days', 'high', 'open'),
+((SELECT id FROM public.customers WHERE phone = '9876543215'), 'Speed Issue', 'Slow speed complaint - getting only 10 Mbps instead of 75 Mbps', 'medium', 'open');
+
+INSERT INTO public.activity_feed (action_type, description, metadata) VALUES
+('payment_marked', 'Payment marked as received for Fathima Rasheed', '{"customer": "Fathima Rasheed", "amount": 999.00}'),
+('incident_reported', 'Fiber cut reported in Mannapuram area', '{"area": "Mannapuram", "type": "Fiber Cut"}');
+
+grant usage on schema "public" to service_role;
+
+GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA "public" TO service_role;

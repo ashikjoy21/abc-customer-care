@@ -13,7 +13,7 @@ from typing import Dict, List, Optional, Any, Tuple
 from call_memory_enhanced import CallMemoryEnhanced, CallStatus
 from troubleshooting_engine import TroubleshootingEngine
 from transcript_enhancer import TranscriptEnhancer
-from utils import CustomerDatabaseManager, TelegramBotManager, RealTimeTranscriber, PhoneNumberCollector
+from utils import CustomerDatabaseManager, RealTimeTranscriber, PhoneNumberCollector
 from step_prioritizer import CustomerTechnicalProfile
 
 # Configure logging
@@ -36,7 +36,6 @@ class ExotelBotEnhanced:
         self.phone_collector = PhoneNumberCollector()
         self.last_message = None
         self.db = CustomerDatabaseManager()
-        self.telegram_bot = TelegramBotManager()
         self.conversation_history = []
         self.last_context = None
         self.waiting_for_phone = True
@@ -580,7 +579,7 @@ class ExotelBotEnhanced:
             return False, None
     
     async def _send_call_summary(self):
-        """Send call summary to Telegram"""
+        """Send call summary to database"""
         try:
             if not self.call_memory:
                 logger.warning("Cannot send call summary: call memory not initialized")
@@ -594,35 +593,33 @@ class ExotelBotEnhanced:
             if troubleshooting_summary:
                 summary["troubleshooting_details"] = troubleshooting_summary
             
-            # Format message
-            message = f"📞 Call Summary: {self.call_id}\n"
-            message += f"📱 Phone: {summary.get('phone_number', 'Unknown')}\n"
-            message += f"👤 Customer: {summary.get('customer_name', 'Unknown')}\n"
-            message += f"⏱️ Duration: {summary.get('duration_seconds', 0)} seconds\n"
-            message += f"📊 Status: {summary.get('status', 'Unknown')}\n"
+            # Log the call summary
+            logger.info(f"Call Summary for {self.call_id}:")
+            logger.info(f"Phone: {summary.get('phone_number', 'Unknown')}")
+            logger.info(f"Customer: {summary.get('customer_name', 'Unknown')}")
+            logger.info(f"Duration: {summary.get('duration_seconds', 0)} seconds")
+            logger.info(f"Status: {summary.get('status', 'Unknown')}")
             
             if summary.get("issue_type"):
-                message += f"🔍 Issue Type: {summary.get('issue_type')}\n"
+                logger.info(f"Issue Type: {summary.get('issue_type')}")
                 
                 # Add sub-issues if available
                 if summary.get("sub_issues"):
-                    message += f"🔎 Sub-issues: {', '.join(summary.get('sub_issues'))}\n"
+                    logger.info(f"Sub-issues: {', '.join(summary.get('sub_issues'))}")
                 
             if summary.get("troubleshooting_details"):
                 ts_details = summary["troubleshooting_details"]
-                message += f"🛠️ Steps Attempted: {ts_details.get('steps_attempted', 0)}\n"
-                message += f"✅ Steps Succeeded: {ts_details.get('steps_succeeded', 0)}\n"
-                message += f"❌ Steps Failed: {ts_details.get('steps_failed', 0)}\n"
+                logger.info(f"Steps Attempted: {ts_details.get('steps_attempted', 0)}")
+                logger.info(f"Steps Succeeded: {ts_details.get('steps_succeeded', 0)}")
+                logger.info(f"Steps Failed: {ts_details.get('steps_failed', 0)}")
             
             if summary.get("escalation_reasons"):
-                message += f"⚠️ Escalation Reasons: {', '.join(summary.get('escalation_reasons', []))}\n"
+                logger.info(f"Escalation Reasons: {', '.join(summary.get('escalation_reasons', []))}")
                 
             # Add customer technical level
-            message += f"👨‍💻 Customer Technical Level: {summary.get('customer_technical_level', 2)}/5\n"
+            logger.info(f"Customer Technical Level: {summary.get('customer_technical_level', 2)}/5")
             
-            # Send to Telegram
-            await self.telegram_bot.send_message(message)
-            logger.info(f"Sent call summary for {self.call_id} to Telegram")
+            logger.info(f"Call summary logged for {self.call_id}")
             
         except Exception as e:
             logger.error(f"Error sending call summary: {e}")

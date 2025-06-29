@@ -1,0 +1,16 @@
+# Supabase Configuration
+# Your Supabase project URL
+SUPABASE_URL=https://your-project.supabase.co
+
+# Your Supabase service role key (for server-side operations)
+SUPABASE_KEY=your-supabase-service-role-key-here
+
+# Your Supabase anon key (for client-side operations)
+SUPABASE_ANON_KEY=your-supabase-anon-key-here
+
+# GCP Configuration
+# Your Google Cloud Platform Gemini API key
+GEMINI_API_KEY=your-gemini-api-key-here
+
+# Note: GCP_CREDENTIALS_PATH is automatically set to "gcp_key.json" in the project root
+# Make sure to place your GCP service account key file as "gcp_key.json" in the project root 

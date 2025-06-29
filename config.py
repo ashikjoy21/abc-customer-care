@@ -8,14 +8,10 @@ PROJECT_ROOT = Path(__file__).parent
 # Load environment variables
 load_dotenv()
 
-# Supabase Configuration
+# Database Configuration
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
-
-# Telegram Configuration
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_OPERATOR_CHAT_ID = os.getenv("TELEGRAM_OPERATOR_CHAT_ID", "-1001234567890")
 
 # GCP Configuration
 GCP_CREDENTIALS_PATH = str(PROJECT_ROOT / "gcp_key.json")

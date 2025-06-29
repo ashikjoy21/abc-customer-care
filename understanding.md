@@ -1,53 +1,86 @@
-Based on my analysis of the entire workspace, I can now provide you with a comprehensive explanation of the logic and identify unused files.
+# ABC Customer Care System - Technical Understanding
 
-## **System Architecture Overview**
+## System Architecture Overview
 
-This is a **Malayalam Customer Care Voicebot System** for an ISP (Internet Service Provider) in Kerala, India. The system provides automated customer support for internet-related issues through voice calls.
+The ABC Customer Care system is a comprehensive voice-based customer support solution designed for ISP companies in Kerala. It provides automated troubleshooting, incident management, and escalation handling through natural language processing and AI-powered conversation management.
 
-### **Core Components:**
+## Core Components
 
-1. **Main Application (`main.py`)** - Entry point that initializes Redis, database, and Telegram bot
-2. **Call Flow (`call_flow.py`)** - Core voicebot logic handling WebSocket connections, speech processing, and conversation flow
-3. **Enhanced Version (`main_enhanced.py` + `exotel_bot_enhanced.py`)** - Improved version with better error handling and structured troubleshooting
-4. **Transcript Enhancement (`utils.py`)** - Malayalam text processing, code-switching detection, and technical term normalization
-5. **Troubleshooting Engine (`troubleshooting_engine.py`)** - Structured problem-solving with decision trees
-6. **Database Management (`db.py`)** - Customer data management
-7. **Telegram Integration (`telegram_notifier.py`)** - Operator notifications and incident management
-8. **RAG System (`data/knowledge_base/`)** - Knowledge retrieval for technical support
+1. **Main Application (`main.py`)** - Entry point that initializes database and core services
+2. **Call Flow Management (`call_flow.py`)** - Handles real-time voice conversations and call routing
+3. **Enhanced Call Flow (`exotel_bot_enhanced.py`)** - Advanced call handling with troubleshooting engine
+4. **Database Management (`db.py`)** - Customer data and call history management
+5. **Supabase Integration (`supabase_client.py`)** - Database operations and incident management
+6. **Escalation Management (`escalation_manager.py`)** - Handles incident escalation and operator notifications
+7. **Real-time Monitoring**: Database notifications for operators
+8. **Knowledge Base (`data/knowledge_base/`)** - RAG-powered troubleshooting guides
+9. **Call Summary**: Database logging with call details
 
-### **Key Features:**
+## Key Features
 
-- **Bilingual Support**: Malayalam + English code-switching
-- **Speech Processing**: STT (Speech-to-Text) and TTS (Text-to-Speech) using Google Cloud
-- **AI Integration**: Gemini AI for natural language understanding
-- **Structured Troubleshooting**: Decision-tree based problem resolution
-- **Real-time Monitoring**: Telegram notifications for operators
-- **Call Recording**: Complete conversation logging
-- **Performance Profiling**: Built-in latency monitoring tools
+### Voice Processing
+- **Real-time Transcription**: Google Cloud Speech-to-Text for Malayalam and English
+- **Text-to-Speech**: Natural Malayalam voice responses
+- **Audio Streaming**: WebSocket-based real-time audio communication
 
-## **Current Active Architecture:**
+### AI-Powered Support
+- **Conversation Management**: Gemini AI for natural language understanding
+- **Issue Classification**: Automatic problem identification and categorization
+- **Troubleshooting Engine**: Step-by-step guided problem resolution
+- **Context Awareness**: Maintains conversation context throughout the call
 
-The system currently runs on:
-- **Entry Point**: `main_enhanced.py` (started via supervisor)
-- **Core Bot**: `exotel_bot_enhanced.py`
-- **Call Memory**: `call_memory_enhanced.py`
-- **Troubleshooting**: `troubleshooting_engine.py`
-- **Knowledge Base**: `data/knowledge_base/enhanced_rag_engine.py`
-- **Utilities**: `utils.py` (contains TranscriptEnhancer)
-- **Database**: `db.py`
-- **Notifications**: `telegram_notifier.py`
+### Customer Management
+- **Phone Validation**: Automatic customer identification via phone number
+- **Profile Management**: Customer history and technical level tracking
+- **Area Issue Detection**: Automatic identification of widespread problems
 
-## **System Flow:**
+### Incident Management
+- **Automatic Escalation**: Routes complex issues to human operators
+- **Database Logging**: Comprehensive call and incident tracking
+- **Real-time Monitoring**: Live incident status updates
 
-1. **Call Initiation**: WebSocket connection from Exotel
-2. **Phone Collection**: DTMF-based phone number collection
-3. **Customer Lookup**: Database query for customer information
-4. **Issue Classification**: AI-powered issue identification
-5. **Structured Troubleshooting**: Decision-tree based problem resolution
-6. **RAG Context**: Knowledge base retrieval for technical guidance
-7. **Conversation Management**: Natural language processing with Gemini AI
-8. **Escalation**: Automatic escalation to human operators when needed
-9. **Call Summary**: Telegram notification with call details
-10. **Recording**: Complete conversation logging
+## Technical Stack
 
-The system is designed for **production use** in a Kerala-based ISP, handling Malayalam-English bilingual customer support calls with sophisticated AI-powered troubleshooting capabilities.
+### Backend
+- **Python 3.9+**: Core application logic
+- **FastAPI**: Web framework for API endpoints
+- **WebSockets**: Real-time communication
+- **Supabase**: PostgreSQL database with real-time features
+
+### AI & ML
+- **Google Cloud Speech**: Voice transcription and synthesis
+- **Google Gemini**: Natural language processing
+- **RAG (Retrieval-Augmented Generation)**: Knowledge base queries
+- **Sentence Transformers**: Text similarity and search
+
+### Infrastructure
+- **Docker**: Containerization
+- **Supervisor**: Process management
+- **Gunicorn**: WSGI server
+- **Nginx**: Reverse proxy (optional)
+
+## Data Flow
+
+1. **Call Initiation**: Customer calls the support number
+2. **Phone Validation**: System validates customer phone number
+3. **Issue Identification**: AI analyzes customer's problem description
+4. **Troubleshooting**: Guided step-by-step problem resolution
+5. **Resolution/Escalation**: Either resolves issue or escalates to human
+6. **Call Summary**: Logs complete call details to database
+
+## Configuration
+
+The system uses environment variables for configuration:
+- Database credentials (Supabase)
+- Google Cloud credentials
+- API keys and endpoints
+- Logging and monitoring settings
+
+## Deployment
+
+The system is designed for production deployment with:
+- Process supervision
+- Health monitoring
+- Logging and metrics
+- Scalable architecture
+- Error handling and recovery

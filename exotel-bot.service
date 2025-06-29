@@ -1,7 +1,6 @@
 [Unit]
 Description=Exotel Bot Service
-After=network.target redis.service
-Wants=redis.service
+After=network.target
 
 [Service]
 User=exotelbot

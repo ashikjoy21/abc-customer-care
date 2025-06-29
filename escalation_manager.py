@@ -3,6 +3,7 @@ from typing import Dict, List, Set, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+from supabase_client import supabase_manager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -85,7 +86,7 @@ class EscalationManager:
                        confidence: float,
                        customer_info: Dict[str, Any],
                        conversation_history: List[Dict[str, str]],
-                       previous_issues: List[Dict[str, Any]] = None) -> bool:
+                       previous_issues: Optional[List[Dict[str, Any]]] = None) -> bool:
         """Determine if the issue should be escalated based on multiple criteria"""
         self.escalation_reasons = []
         
@@ -195,7 +196,71 @@ class EscalationManager:
                            EscalationReason.REPEATED_ISSUE] for reason in self.escalation_reasons):
             return "medium"
         else:
-            return "normal"
+            return "low"
+    
+    def create_escalation_in_database(
+        self,
+        issue_type: str,
+        customer_phone: str,
+        customer_info: Dict[str, Any],
+        conversation_summary: str,
+        troubleshooting_steps: List[str],
+        escalation_reasons: List[str]
+    ) -> Optional[str]:
+        """Create an escalation entry in the Supabase database"""
+        try:
+            # Build description with comprehensive details
+            description_parts = [
+                f"Issue Type: {issue_type}",
+                f"Customer Phone: {customer_phone}",
+                f"Escalation Reasons: {', '.join(escalation_reasons)}",
+                f"Troubleshooting Time: {(datetime.now() - self.start_time).total_seconds() / 60:.1f} minutes",
+                f"Steps Attempted: {len(troubleshooting_steps)}",
+                "",
+                "Customer Information:",
+                f"- Name: {customer_info.get('name', 'Unknown')}",
+                f"- Provider: {customer_info.get('isp', 'Unknown')}",
+                f"- Region: {customer_info.get('region', 'Unknown')}",
+                f"- Plan: {customer_info.get('plan', 'Unknown')}",
+                "",
+                "Troubleshooting Steps:",
+            ]
+            
+            # Add troubleshooting steps
+            for i, step in enumerate(troubleshooting_steps, 1):
+                description_parts.append(f"{i}. {step}")
+            
+            description_parts.extend([
+                "",
+                "Conversation Summary:",
+                conversation_summary
+            ])
+            
+            description = "\n".join(description_parts)
+            
+            # Determine priority
+            priority = self.get_escalation_priority()
+            
+            # Create escalation in database
+            escalation_id = supabase_manager.create_escalation(
+                issue_type=issue_type,
+                description=description,
+                priority=priority,
+                customer_id=customer_info.get('customer_id'),  # If available
+                escalated_by=None,  # Could be set to bot user ID if available
+                assigned_to=None  # Will be assigned by human operator
+            )
+            
+            if escalation_id:
+                logger.info(f"✅ Escalation created in database: {escalation_id} (Priority: {priority})")
+                return escalation_id
+            else:
+                logger.error("❌ Failed to create escalation in database")
+                return None
+                
+        except Exception as e:
+            logger.error(f"❌ Error creating escalation in database: {e}")
+            return None
     
     def reset(self):
         """Reset the escalation manager for a new session"""

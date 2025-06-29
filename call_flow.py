@@ -30,6 +30,11 @@ from dotenv import load_dotenv
 from utils import format_customer_info, TranscriptEnhancer
 import numpy as np
 import hashlib
+from escalation_manager import EscalationManager
+from supabase_client import SupabaseManager
+from transcript_enhancer import TranscriptEnhancer
+from troubleshooting_engine import TroubleshootingEngine
+from utils import format_duration, get_status_emoji, get_resolution_emoji, format_customer_info
 
 from config import (
     GCP_CREDENTIALS_PATH,
@@ -41,7 +46,6 @@ from config import (
     MAX_PHONE_LENGTH
 )
 from db import CustomerDatabaseManager
-from telegram_notifier import TelegramBotManager
 from utils import logger
 
 # Initialize response cache with TTL
@@ -107,6 +111,10 @@ class CallMemory:
     last_interaction: Optional[str] = None
     customer_info: Optional[Dict[str, Any]] = None
     conversation_history: List[Dict[str, str]] = field(default_factory=list)
+    # Add escalation tracking fields
+    escalation_reasons: List[str] = field(default_factory=list)
+    issue_type: Optional[str] = None
+    sub_issues: List[str] = field(default_factory=list)
     
     def add_troubleshooting_step(self, step: str, result: str):
         """Add a troubleshooting step with timestamp"""
@@ -147,7 +155,10 @@ class CallMemory:
                 for step in self.troubleshooting_steps
             ],
             "resolution_notes": self.resolution_notes,
-            "customer_info": self.customer_info
+            "customer_info": self.customer_info,
+            "escalation_reasons": self.escalation_reasons,
+            "issue_type": self.issue_type,
+            "sub_issues": self.sub_issues
         }
         
     def get_model_context(self) -> str:
@@ -872,7 +883,6 @@ class ExotelBot:
         self.phone_collector = PhoneNumberCollector()
         self.last_message = None
         self.db = CustomerDatabaseManager()
-        self.telegram_bot = TelegramBotManager()
         self.conversation_history = []
         self.last_context = None
         self.waiting_for_phone = False
@@ -882,6 +892,18 @@ class ExotelBot:
         self.last_message_timestamp = datetime.now()
         self.last_user_speaking_time = None
         self.gemini_lock = asyncio.Lock()  # Add lock for Gemini API calls
+        
+        # Initialize escalation manager and Supabase manager
+        self.escalation_manager = EscalationManager()
+        self.supabase_manager = SupabaseManager()
+        
+        # Test Supabase permissions for escalations table
+        if hasattr(self.supabase_manager, 'test_escalations_permissions'):
+            permissions_ok = self.supabase_manager.test_escalations_permissions()
+            if not permissions_ok:
+                logger.warning("⚠️ Supabase escalations permissions test failed - escalations may not be recorded")
+            else:
+                logger.info("✅ Supabase escalations permissions verified")
         
         # Preload RAG knowledge for common troubleshooting scenarios
         self.preloaded_rag_data = self._preload_rag_knowledge()
@@ -1053,6 +1075,10 @@ class ExotelBot:
         if hasattr(self, 'transcriber') and self.transcriber:
             self.transcriber.stop()
             self.transcriber = None
+            
+        # Reset escalation manager for new call
+        if hasattr(self, 'escalation_manager'):
+            self.escalation_manager.reset()
             
         gemini_model = genai.GenerativeModel("gemini-2.0-flash-lite")
         self.chat_session = gemini_model.start_chat(history=[
@@ -1295,6 +1321,11 @@ class ExotelBot:
                 logger.info(f"Ignoring transcription for inactive call: {text}")
                 return
                 
+            # IMPORTANT: If we're waiting for phone number collection, ignore all transcriptions
+            if self.waiting_for_phone:
+                logger.info(f"Ignoring transcription while waiting for phone number: {text}")
+                return
+                
             # Skip if silence detected
             if self._is_silence(text):
                 logger.info(f"Silence detected, ignoring: '{text}'")
@@ -1476,10 +1507,13 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             # Update call memory
             if self.call_memory:
                 self.call_memory.add_troubleshooting_step(text, response_text)
+                
+                # Check for escalation triggers
+                await self._check_for_escalation(text, response_text)
 
         except Exception as e:
             logger.error(f"Error in transcription handling: {e}")
-            error_response = "ക്ഷമിക്കണം, ഒരു ചെറിയ സാങ്കേതിക പ്രശ്നമുണ്ട്. ദയവായി ഒരു നിമിഷം കാത്തിരിക്കൂ, ഞാൻ വീണ്ടും ശ്രമിക്കാം."
+            error_response = "ക്ഷമിക്കണം, ഒരു ചെറിയ സാങ്കേതിക പ്രശ്നമുണ്ട്. ദയവായി ഒരു നിമിറ്റം കാത്തിരിക്കൂ, ഞാൻ വീണ്ടും ശ്രമിക്കാം."
             await self.play_message(error_response)
     
     async def _get_rag_context(self, text: str) -> str:
@@ -1664,6 +1698,137 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                 
         return technical_terms
 
+    async def _check_for_escalation(self, user_text: str, bot_response: str):
+        """Check if escalation is needed and handle it"""
+        try:
+            if not self.call_memory or not hasattr(self, 'escalation_manager'):
+                return
+                
+            # Update escalation manager with current conversation state
+            customer_info = self.call_memory.customer_info or {}
+            
+            # Determine issue type and sub-issues based on conversation
+            issue_type = self.call_memory.issue_type or "internet_down"
+            sub_issues = self.call_memory.sub_issues or []
+            
+            # Calculate confidence based on conversation clarity
+            confidence = 0.8  # Default confidence
+            if len(user_text.strip().split()) <= 2:
+                confidence = 0.4  # Low confidence for unclear messages
+            elif len(user_text.strip().split()) >= 10:
+                confidence = 0.9  # High confidence for detailed messages
+            
+            # Check if escalation is needed
+            should_escalate = self.escalation_manager.should_escalate(
+                failed_steps=len([step for step in self.call_memory.troubleshooting_steps if "ശരിയായില്ല" in step.result or "ഇല്ല" in step.result]),
+                total_steps=len(self.call_memory.troubleshooting_steps),
+                issue_type=issue_type,
+                sub_issues=sub_issues,
+                confidence=confidence,
+                customer_info=customer_info,
+                conversation_history=self.call_memory.conversation_history,
+                previous_issues=[]  # Could be populated from database if needed
+            )
+            
+            if should_escalate:
+                # Get escalation reasons
+                escalation_reasons = self.escalation_manager.get_escalation_reasons()
+                
+                # Update call memory
+                self.call_memory.status = CallStatus.ESCALATED
+                self.call_memory.escalation_reasons.extend(escalation_reasons)
+                
+                # Log escalation
+                logger.info(f"Call {self.call_id} escalated due to: {', '.join(escalation_reasons)}")
+                
+                # Create escalation in database
+                await self._create_escalation_in_database(escalation_reasons)
+                
+                # Play escalation message
+                escalation_msg = (
+                    "ക്ഷമിക്കണം, നിങ്ങളുടെ പ്രശ്നം പരിഹരിക്കാൻ എനിക്ക് കഴിയുന്നില്ല. "
+                    "ഞാൻ നിങ്ങളെ ഒരു സാങ്കേതിക വിദഗ്ധനുമായി ബന്ധിപ്പിക്കാൻ പോകുന്നു. "
+                    "ദയവായി കാത്തിരിക്കൂ."
+                )
+                await self.play_message(escalation_msg)
+                
+        except Exception as e:
+            logger.error(f"Error checking for escalation: {e}")
+
+    async def _create_escalation_in_database(self, escalation_reasons: List[str]):
+        """Create escalation entry in Supabase database"""
+        try:
+            if not self.call_memory or not hasattr(self, 'supabase_manager'):
+                logger.warning("Cannot create escalation: missing call memory or supabase manager")
+                return
+                
+            # Prepare escalation data
+            customer_info = self.call_memory.customer_info or {}
+            issue_type = self.call_memory.issue_type or "internet_down"
+            
+            # Create conversation summary
+            conversation_summary = ""
+            if self.call_memory.conversation_history:
+                recent_exchanges = self.call_memory.conversation_history[-10:]  # Last 10 exchanges
+                for exchange in recent_exchanges:
+                    if "user" in exchange and "bot" in exchange:
+                        conversation_summary += f"User: {exchange['user']}\n"
+                        conversation_summary += f"Bot: {exchange['bot']}\n\n"
+            
+            # Create troubleshooting steps summary
+            troubleshooting_steps = []
+            for step in self.call_memory.troubleshooting_steps:
+                troubleshooting_steps.append(f"{step.step} → {step.result}")
+            
+            # Create escalation in database using escalation manager
+            escalation_id = self.escalation_manager.create_escalation_in_database(
+                issue_type=issue_type,
+                customer_phone=self.call_memory.phone_number or "Unknown",
+                customer_info=customer_info,
+                conversation_summary=conversation_summary,
+                troubleshooting_steps=troubleshooting_steps,
+                escalation_reasons=escalation_reasons
+            )
+            
+            if escalation_id:
+                logger.info(f"✅ Escalation created in database: {escalation_id}")
+            else:
+                logger.error("❌ Failed to create escalation in database")
+                # Fallback: Log escalation locally
+                await self._log_escalation_locally(escalation_reasons, customer_info, issue_type, conversation_summary, troubleshooting_steps)
+                
+        except Exception as e:
+            logger.error(f"Error creating escalation in database: {e}")
+            # Fallback: Log escalation locally
+            await self._log_escalation_locally(escalation_reasons, self.call_memory.customer_info or {}, self.call_memory.issue_type or "unknown", "", [])
+
+    async def _log_escalation_locally(self, escalation_reasons: List[str], customer_info: Dict[str, Any], issue_type: str, conversation_summary: str, troubleshooting_steps: List[str]):
+        """Log escalation information locally when Supabase fails"""
+        try:
+            # Create logs directory if it doesn't exist
+            os.makedirs("logs", exist_ok=True)
+            
+            escalation_log = {
+                "timestamp": datetime.now().isoformat(),
+                "call_id": self.call_id,
+                "customer_phone": self.call_memory.phone_number if self.call_memory else "Unknown",
+                "issue_type": issue_type,
+                "escalation_reasons": escalation_reasons,
+                "customer_info": customer_info,
+                "conversation_summary": conversation_summary,
+                "troubleshooting_steps": troubleshooting_steps,
+                "call_duration_seconds": self.call_memory.get_call_duration() if self.call_memory else 0
+            }
+            
+            # Log to file
+            with open("logs/escalations.log", "a", encoding="utf-8") as f:
+                f.write(json.dumps(escalation_log, ensure_ascii=False, indent=2) + "\n\n")
+            
+            logger.info(f"📝 Escalation logged locally to logs/escalations.log")
+            
+        except Exception as e:
+            logger.error(f"Error logging escalation locally: {e}")
+
     async def check_if_phone_needed(self, text: str, rag_context: str) -> bool:
         """Check if phone number is needed"""
         try:
@@ -1679,12 +1844,8 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             return True
 
     async def _send_call_summary(self):
-        """Send call summary to Telegram"""
+        """Send call summary to database"""
         try:
-            if not self.telegram_bot:
-                logger.warning("Telegram bot not configured, skipping call summary")
-                return
-                
             # Get customer info
             customer_info = self.call_memory.customer_info or {}
             
@@ -1783,19 +1944,6 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                     # If no technical statements, take the 3 most recent
                     recent_transcripts = recent_transcripts[-3:]
             
-            await self.telegram_bot.send_call_report(
-                phone=self.call_memory.phone_number,
-                issue=issue_summary,  # Concise issue description
-                call_summary=call_summary,  # Detailed call summary
-                recent_transcripts=recent_transcripts,
-                customer_info=customer_info,  # Use the full customer info
-                call_status=self.call_memory.status.value,
-                resolution=resolution_status,
-                duration=self.call_memory.get_call_duration(),
-                was_resolved=self.call_memory.status == CallStatus.RESOLVED,
-                troubleshooting_steps=troubleshooting_steps  # Add actual troubleshooting steps
-            )
-            
             # Log the full summary for debugging
             logger.info(f"Call Summary for {self.call_memory.phone_number}:")
             logger.info(f"Issue: {issue_summary}")
@@ -1804,17 +1952,51 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             logger.info(f"Duration: {self.call_memory.get_call_duration()}s")
             logger.info(f"Status: {self.call_memory.status.value}")
             
+            # Log escalation information if call was escalated
+            if self.call_memory.status == CallStatus.ESCALATED and self.call_memory.escalation_reasons:
+                logger.info(f"Escalation Reasons: {', '.join(self.call_memory.escalation_reasons)}")
+                
+                # Ensure escalation is created in database if not already done
+                if hasattr(self, 'escalation_manager') and hasattr(self, 'supabase_manager'):
+                    await self._create_escalation_in_database(self.call_memory.escalation_reasons)
+            
         except Exception as e:
             logger.error(f"Error sending call summary: {e}")
             logger.error(f"Call memory state: {self.call_memory.generate_summary() if self.call_memory else 'No call memory'}")
-            
+
     async def handle_dtmf(self, digit: str):
         """Handle DTMF input"""
         try:
+            logger.info(f"Handling DTMF digit: {digit}, waiting_for_phone: {self.waiting_for_phone}")
+            
+            # Check for escalation request (0 key)
+            if digit == "0" and not self.waiting_for_phone:
+                # Customer requested escalation via DTMF
+                if self.call_memory:
+                    self.call_memory.status = CallStatus.ESCALATED
+                    self.call_memory.escalation_reasons.append("Customer requested escalation via DTMF")
+                    
+                    # Create escalation in database
+                    await self._create_escalation_in_database(["Customer requested escalation via DTMF"])
+                    
+                    # Play escalation message
+                    escalation_msg = (
+                        "ഞാൻ നിങ്ങളെ ഒരു സാങ്കേതിക വിദഗ്ധനുമായി ബന്ധിപ്പിക്കാൻ പോകുന്നു. "
+                        "ദയവായി കാത്തിരിക്കൂ."
+                    )
+                    await self.play_message(escalation_msg)
+                    
+                    # Send call summary
+                    await self._send_call_summary()
+                    return
+                    
+            # If we're not collecting phone numbers and not escalating, start collection
             if not self.phone_collector.is_collecting:
+                logger.info("Starting phone number collection")
                 self.phone_collector.start_collection()
                 
             is_complete, phone, error = self.phone_collector.add_digit(digit)
+            logger.info(f"Phone collection result: complete={is_complete}, phone={phone}, error={error}")
             
             if error:
                 # Make error messages more conversational
@@ -1853,6 +2035,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                 
                 # No longer waiting for phone number
                 self.waiting_for_phone = False
+                logger.info(f"Set waiting_for_phone to False after successful phone validation")
                 
                 # Create a more personalized and warm greeting
                 customer_name = customer_info.get('name', '')
@@ -1978,16 +2161,10 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         )
         
         # Update call memory to indicate fiber cut detected
-        if hasattr(self, 'call_memory'):
-            self.call_memory.issue_context["is_red_light"] = True
-            self.call_memory.issue_context["needs_technician"] = True
-            self.call_memory.issue_context["skip_further_troubleshooting"] = True
-            self.call_memory.issue_context["fiber_cut_detected"] = True
-            
-            # Set the issue type and sub-issue
-            if hasattr(self.call_memory, 'classified_issue'):
-                self.call_memory.classified_issue = "internet_down"
-                self.call_memory.sub_issues = ["fiber_cut"]
+        if hasattr(self, 'call_memory') and self.call_memory:
+            self.call_memory.issue_type = "internet_down"
+            self.call_memory.sub_issues = ["fiber_cut"]
+            self.call_memory.escalation_reasons.append("Red light detected - potential fiber cut")
         
         return fiber_cut_msg
 
@@ -2020,15 +2197,10 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         )
         
         # Update call memory to indicate adapter issue detected
-        if hasattr(self, 'call_memory'):
-            self.call_memory.issue_context["is_power_issue"] = True
-            self.call_memory.issue_context["needs_technician"] = True
-            self.call_memory.issue_context["adapter_problem"] = True
-            
-            # Set the issue type and sub-issue
-            if hasattr(self.call_memory, 'classified_issue'):
-                self.call_memory.classified_issue = "hardware_issue"
-                self.call_memory.sub_issues = ["adapter_issue"]
+        if hasattr(self, 'call_memory') and self.call_memory:
+            self.call_memory.issue_type = "hardware_issue"
+            self.call_memory.sub_issues = ["adapter_issue"]
+            self.call_memory.escalation_reasons.append("No power detected - potential adapter issue")
         
         return adapter_issue_msg
 
@@ -2038,10 +2210,6 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         
         # Log the transcript
         logger.info(f"Processing transcript: {transcript}")
-        
-        # Update conversation history
-        if hasattr(self, 'call_memory'):
-            self.call_memory.add_user_message(transcript)
         
         # Check for no power/adapter issue first
         if self._check_for_no_power(transcript):
@@ -2060,7 +2228,8 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             return response
         
         # Continue with normal processing if not red light or power issue
-        # ... [rest of the method remains unchanged]
+        # For now, return a default response
+        return "ക്ഷമിക്കണം, എനിക്ക് നിങ്ങളുടെ പ്രശ്നം മനസ്സിലായില്ല. ദയവായി വീണ്ടും വിവരിക്കാമോ?"
 
 async def handle_client(websocket):
     """Handle a single client connection"""

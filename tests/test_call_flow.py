@@ -16,18 +16,14 @@ def mock_db():
     return Mock()
 
 @pytest.fixture
-def mock_telegram_bot():
-    return Mock()
-
-@pytest.fixture
 def mock_transcriber():
     return Mock()
 
 @pytest.fixture
-def bot(mock_db, mock_telegram_bot):
+def bot(mock_db):
+    """Create bot instance with mocked dependencies"""
     bot = ExotelBot()
     bot.db = mock_db
-    bot.telegram_bot = mock_telegram_bot
     return bot
 
 def test_call_memory_initialization():
