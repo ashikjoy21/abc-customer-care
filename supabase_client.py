@@ -41,14 +41,13 @@ class SupabaseManager:
                 logger.info(f"JWT role: {role}")
                 
                 if role == 'anon':
-                    logger.error("❌ You're using the ANON key! Please use the SERVICE ROLE key instead.")
-                    logger.error("❌ Go to Supabase Dashboard → Settings → API → Copy Service Role Key")
-                    return
+                    logger.warning("⚠️ You're using the ANON key! Please use the SERVICE ROLE key for full privileges.")
+                    logger.warning("⚠️ Go to Supabase Dashboard → Settings → API → Copy Service Role Key")
                 elif role == 'service_role':
                     logger.info("✅ Using service role key - this is correct!")
                 else:
                     logger.warning(f"⚠️ Unknown role in JWT: {role}")
-                    
+                # Do not return or block initialization, just log
             except Exception as jwt_error:
                 logger.warning(f"⚠️ Could not decode JWT: {jwt_error}")
             
