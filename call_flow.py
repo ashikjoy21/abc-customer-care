@@ -1830,7 +1830,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                 logger.info(f"Call {self.call_id} escalated due to: {', '.join(escalation_reasons)}")
                 
                 # Create escalation in database
-                await self._create_escalation_in_database(escalation_reasons)
+                # await self._create_escalation_in_database(escalation_reasons)  # <-- Removed to prevent double escalation
                 
                 # Play escalation message
                 escalation_msg = (
@@ -1843,51 +1843,45 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         except Exception as e:
             logger.error(f"Error checking for escalation: {e}")
 
-    async def _create_escalation_in_database(self, escalation_reasons: List[str]):
+    async def _create_escalation_in_database(self, escalation_reasons: List[str], description: str = None):
         """Create escalation entry in Supabase database"""
         try:
             if not self.call_memory or not hasattr(self, 'supabase_manager'):
                 logger.warning("Cannot create escalation: missing call memory or supabase manager")
                 return
-                
-            # Prepare escalation data
             customer_info = self.call_memory.customer_info or {}
             issue_type = self.call_memory.issue_type or "internet_down"
-            
-            # Create conversation summary
+            customer_id = self.call_memory.customer_id or \
+                customer_info.get("User name") or customer_info.get("User Name")
+            if customer_id:
+                customer_info["customer_id"] = customer_id
             conversation_summary = ""
             if self.call_memory.conversation_history:
-                recent_exchanges = self.call_memory.conversation_history[-10:]  # Last 10 exchanges
+                recent_exchanges = self.call_memory.conversation_history[-10:]
                 for exchange in recent_exchanges:
                     if "user" in exchange and "bot" in exchange:
                         conversation_summary += f"User: {exchange['user']}\n"
                         conversation_summary += f"Bot: {exchange['bot']}\n\n"
-            
-            # Create troubleshooting steps summary
             troubleshooting_steps = []
             for step in self.call_memory.troubleshooting_steps:
                 troubleshooting_steps.append(f"{step.step} → {step.result}")
-            
-            # Create escalation in database using escalation manager
+            # Use the provided description if available, else fallback to conversation_summary
             escalation_id = self.escalation_manager.create_escalation_in_database(
                 issue_type=issue_type,
                 customer_phone=self.call_memory.phone_number or "Unknown",
                 customer_info=customer_info,
                 conversation_summary=conversation_summary,
                 troubleshooting_steps=troubleshooting_steps,
-                escalation_reasons=escalation_reasons
+                escalation_reasons=escalation_reasons,
+                description=description if description else None
             )
-            
             if escalation_id:
                 logger.info(f"✅ Escalation created in database: {escalation_id}")
             else:
                 logger.error("❌ Failed to create escalation in database")
-                # Fallback: Log escalation locally
                 await self._log_escalation_locally(escalation_reasons, customer_info, issue_type, conversation_summary, troubleshooting_steps)
-                
         except Exception as e:
             logger.error(f"Error creating escalation in database: {e}")
-            # Fallback: Log escalation locally
             await self._log_escalation_locally(escalation_reasons, self.call_memory.customer_info or {}, self.call_memory.issue_type or "unknown", "", [])
 
     async def _log_escalation_locally(self, escalation_reasons: List[str], customer_info: Dict[str, Any], issue_type: str, conversation_summary: str, troubleshooting_steps: List[str]):
@@ -1979,6 +1973,16 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             issue_summary = await query_gemini(issue_prompt, self.chat_session, self.gemini_lock, context)
             call_summary = await query_gemini(summary_prompt, self.chat_session, self.gemini_lock, context)
             
+            # Translate and summarize the issue to English for escalation description
+            issue_summary_en = ""
+            if issue_summary:
+                translate_prompt = (
+                    f"Translate the following technical issue summary to English, making it concise and clear for a human operator. "
+                    f"Keep it under 20 words.\n\nIssue: {issue_summary}"
+                )
+                issue_summary_en = await query_gemini(translate_prompt, self.chat_session, self.gemini_lock)
+                issue_summary_en = _limit_response_length(issue_summary_en, 100)
+            
             # Only generate steps if we don't have explicit troubleshooting steps recorded
             if not troubleshooting_steps:
                 steps_tried = await query_gemini(steps_prompt, self.chat_session, self.gemini_lock, context)
@@ -2043,10 +2047,10 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             # Log escalation information if call was escalated
             if self.call_memory.status == CallStatus.ESCALATED and self.call_memory.escalation_reasons:
                 logger.info(f"Escalation Reasons: {', '.join(self.call_memory.escalation_reasons)}")
-                
                 # Ensure escalation is created in database if not already done
                 if hasattr(self, 'escalation_manager') and hasattr(self, 'supabase_manager'):
-                    await self._create_escalation_in_database(self.call_memory.escalation_reasons)
+                    # Pass the English summary as the description
+                    await self._create_escalation_in_database(self.call_memory.escalation_reasons, description=issue_summary_en)
             
         except Exception as e:
             logger.error(f"Error sending call summary: {e}")
@@ -2063,17 +2067,14 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                 if self.call_memory:
                     self.call_memory.status = CallStatus.ESCALATED
                     self.call_memory.escalation_reasons.append("Customer requested escalation via DTMF")
-                    
                     # Create escalation in database
                     await self._create_escalation_in_database(["Customer requested escalation via DTMF"])
-                    
                     # Play escalation message
                     escalation_msg = (
                         "ഞാൻ നിങ്ങളെ ഒരു സാങ്കേതിക വിദഗ്ധനുമായി ബന്ധിപ്പിക്കാൻ പോകുന്നു. "
                         "ദയവായി കാത്തിരിക്കൂ."
                     )
                     await self.play_message(escalation_msg)
-                    
                     # Send call summary
                     await self._send_call_summary()
                     return
@@ -2347,6 +2348,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         plan = customer_info.get("plan") or customer_info.get("Current Plan") or "Unknown"
         customer_id = customer_info.get("id")
         sub_issues = [s.lower() for s in (self.call_memory.sub_issues or [])]
+        logger.info(f"Storing inferred problem: {issue_type} with sub-issues: {sub_issues}")
         incident_sub_issues = ["fiber_cut", "adapter_issue", "power_outage", "area_outage"]
         if any(sub in sub_issues for sub in incident_sub_issues):
             self.supabase_manager.create_incident(

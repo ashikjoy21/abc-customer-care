@@ -632,7 +632,7 @@ def create_escalation_entry(
     """Create escalation entry in Supabase"""
     return supabase_manager.create_escalation(
         issue_type, description, priority, customer_id, escalated_by, assigned_to
-    )
+    ) 
 
 def ml_to_en_tech_terms(text: str) -> str:
     mapping = {
