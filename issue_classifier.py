@@ -1,7 +1,8 @@
 import re
 import logging
-from typing import Dict, List, Tuple, Optional, Set
+from typing import Dict, List, Tuple, Optional, Set, Any
 from dataclasses import dataclass, field
+from escalation_manager import EscalationCriteria
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -13,7 +14,7 @@ class IssueClassificationResult:
     issue_type: str
     confidence: float
     sub_issues: List[str] = field(default_factory=list)
-    metadata: Dict[str, any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 class IssueClassifier:
     """Advanced issue classifier using keyword analysis and contextual understanding"""
@@ -159,7 +160,7 @@ class IssueClassifier:
         
         return detected_sub_issues
     
-    def _extract_technical_context(self, text: str) -> Dict[str, any]:
+    def _extract_technical_context(self, text: str) -> Dict[str, Any]:
         """Extract technical context from text"""
         context = {}
         
@@ -183,14 +184,15 @@ class IssueClassifier:
         
         return context
     
-    def classify(self, text: str, conversation_history: List[Dict[str, str]] = None) -> IssueClassificationResult:
+    def classify(self, text: str, conversation_history: Optional[List[Dict[str, str]]] = None) -> IssueClassificationResult:
         """Classify the issue based on text and conversation history"""
         # Combine current text with recent conversation history if available
         text_to_analyze = text.lower()
-        if conversation_history:
-            for entry in conversation_history[-3:]:  # Last 3 exchanges
-                if "user" in entry and entry["user"]:
-                    text_to_analyze += " " + entry["user"].lower()
+        if conversation_history is None:
+            conversation_history = []
+        for entry in conversation_history[-3:]:  # Last 3 exchanges
+            if "user" in entry and entry["user"]:
+                text_to_analyze += " " + entry["user"].lower()
         
         # Special case: Immediately detect adapter/power issue
         no_power_indicators = ["no light", "no power", "ലൈറ്റ് ഇല്ല", "ലൈറ്റ് വരുന്നില്ല", "പവർ ഇല്ല", 

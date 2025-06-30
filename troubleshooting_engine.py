@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 
 from issue_classifier import IssueClassifier, IssueClassificationResult
 from step_prioritizer import StepPrioritizer, CustomerTechnicalProfile
-from escalation_manager import EscalationManager, EscalationCriteria
+from escalation_manager import EscalationManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -193,14 +193,13 @@ class TroubleshootingEngine:
             
             # Update sub-issues if any are detected
             if classification_result.sub_issues and self.current_flow:
-                if not hasattr(self.current_flow, 'sub_issues'):
+                if not hasattr(self.current_flow, 'sub_issues') or self.current_flow is None:
                     self.current_flow.sub_issues = []
-                    
                 # Add any new sub-issues that aren't already tracked
                 for sub_issue in classification_result.sub_issues:
                     if sub_issue not in self.current_flow.sub_issues:
                         self.current_flow.sub_issues.append(sub_issue)
-                
+            
             # Update issue context with confidence and metadata
             self.issue_context["confidence"] = classification_result.confidence
             self.issue_context["detected_issue"] = classification_result.issue_type
@@ -217,12 +216,12 @@ class TroubleshootingEngine:
                 self.issue_context["restart_first"] = classification_result.metadata.get("restart_first", True)
                 
                 # Add fiber_cut to sub-issues if detected
-                if "fiber_cut" in classification_result.sub_issues:
-                    if not hasattr(self.current_flow, 'sub_issues'):
+                if "fiber_cut" in classification_result.sub_issues and self.current_flow:
+                    if not hasattr(self.current_flow, 'sub_issues') or self.current_flow is None:
                         self.current_flow.sub_issues = []
                     if "fiber_cut" not in self.current_flow.sub_issues:
                         self.current_flow.sub_issues.append("fiber_cut")
-                
+            
             logger.info(f"Classified issue as '{classification_result.issue_type}' with confidence {classification_result.confidence:.2f}")
             if classification_result.sub_issues:
                 logger.info(f"Detected sub-issues: {classification_result.sub_issues}")
@@ -280,7 +279,7 @@ class TroubleshootingEngine:
         if escalation_updates:
             self.escalation_manager.update_criteria(escalation_updates)
     
-    def start_troubleshooting(self, issue_type: str) -> TroubleshootingStep:
+    def start_troubleshooting(self, issue_type: str) -> Optional[TroubleshootingStep]:
         """Start a troubleshooting flow for the given issue type"""
         if issue_type not in self.flows:
             logger.warning(f"No flow found for issue type: {issue_type}, defaulting to internet_down")
@@ -292,9 +291,9 @@ class TroubleshootingEngine:
         if hasattr(self, 'issue_context') and self.issue_context.get('is_red_light') == True:
             logger.info("Red light detected - prioritizing fiber cut troubleshooting")
             # Add fiber_cut sub-issue if not already present
-            if not hasattr(self.current_flow, 'sub_issues'):
+            if self.current_flow and (not hasattr(self.current_flow, 'sub_issues') or self.current_flow is None):
                 self.current_flow.sub_issues = []
-            if 'fiber_cut' not in self.current_flow.sub_issues:
+            if self.current_flow and 'fiber_cut' not in self.current_flow.sub_issues:
                 self.current_flow.sub_issues.append('fiber_cut')
                 
             # Create a custom step for immediate fiber cut handling
@@ -309,13 +308,13 @@ class TroubleshootingEngine:
             )
             
             # Add the custom step to the flow
-            self.current_flow.steps["fiber_cut_detected"] = fiber_cut_step
-            
-            # Set the current step to this fiber cut step
-            self.current_flow.current_step_id = "fiber_cut_detected"
+            if self.current_flow:
+                self.current_flow.steps["fiber_cut_detected"] = fiber_cut_step
+                # Set the current step to this fiber cut step
+                self.current_flow.current_step_id = "fiber_cut_detected"
             
             # Add a technician scheduling step if it doesn't exist
-            if "schedule_technician" not in self.current_flow.steps:
+            if self.current_flow and "schedule_technician" not in self.current_flow.steps:
                 tech_step = TroubleshootingStep(
                     id="schedule_technician",
                     description="Schedule technician visit for fiber cut repair",
@@ -326,9 +325,10 @@ class TroubleshootingEngine:
                 self.current_flow.steps["schedule_technician"] = tech_step
         else:
             # Normal flow - start with the root step
-            self.current_flow.current_step_id = self.current_flow.root_step_id
+            if self.current_flow:
+                self.current_flow.current_step_id = self.current_flow.root_step_id
         
-        return self.get_current_step()
+        return self.get_current_step() if self.current_flow else None
     
     def get_current_step(self) -> Optional[TroubleshootingStep]:
         """Get the current troubleshooting step"""

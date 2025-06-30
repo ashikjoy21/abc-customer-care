@@ -221,7 +221,8 @@ class SupabaseManager:
         priority: str = "medium",
         customer_id: Optional[str] = None,
         escalated_by: Optional[str] = None,
-        assigned_to: Optional[str] = None
+        assigned_to: Optional[str] = None,
+        customer_info: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """Create escalation entry in Supabase"""
         try:
@@ -234,6 +235,10 @@ class SupabaseManager:
             if priority not in valid_priorities:
                 logger.warning(f"Invalid priority '{priority}', using 'medium'")
                 priority = "medium"
+            
+            # If customer_id is not provided, try to extract from customer_info
+            if not customer_id and customer_info:
+                customer_id = customer_info.get("User Name") or customer_info.get("username")
             
             escalation_data = {
                 "id": str(uuid.uuid4()),
@@ -462,21 +467,20 @@ class SupabaseManager:
             logger.error(f"❌ Error testing authentication: {e}")
             return False
 
-    def check_relevant_incidents(self, user_query: str, customer_area: str = None, issue_type: str = None) -> List[Dict[str, Any]]:
+    def check_relevant_incidents(self, user_query: str, customer_area: str = "", issue_type: str = "") -> List[Dict[str, Any]]:
         """Check for relevant incidents based on user query and customer area"""
         try:
             if not self.client:
                 logger.error("Supabase client not initialized")
                 return []
-            
-            # Get all active incidents
-            response = self.client.table('incidents').select('*').eq('status', 'active').execute()
-            
+            # Ensure customer_area and issue_type are strings
+            customer_area = customer_area or ""
+            issue_type = issue_type or ""
+            # Get all active and unresolved incidents
+            response = self.client.table('incidents').select('*').neq('status', 'resolved').execute()
             if not response.data:
                 return []
-            
             relevant_incidents = []
-            
             # Keywords to match different types of issues
             issue_keywords = {
                 'wifi': ['wifi', 'wireless', 'വൈഫൈ', 'വൈ ഫൈ', 'wireless connection'],
@@ -487,60 +491,48 @@ class SupabaseManager:
                 'outage': ['outage', 'ഔട്ടേജ്', 'down', 'ഡൗൺ', 'not working', 'ഇല്ല'],
                 'payment': ['payment', 'പേയ്മെന്റ്', 'bill', 'ബിൽ', 'recharge', 'റീചാർജ്']
             }
-            
-            # Normalize user query for matching
             query_lower = user_query.lower()
-            
             for incident in response.data:
+                # Only consider incidents from the same region/area
+                incident_area = (incident.get('area') or '').lower()
+                if customer_area and customer_area.lower() not in incident_area:
+                    continue
                 incident_relevance_score = 0
                 incident_matched_keywords = []
-                
                 # Check area match (highest priority)
                 if customer_area and incident.get('area'):
                     if customer_area.lower() in incident['area'].lower() or incident['area'].lower() in customer_area.lower():
                         incident_relevance_score += 10
                         incident_matched_keywords.append(f"Area match: {incident['area']}")
-                
                 # Check issue type match
                 if incident.get('issue_type') and issue_type:
                     if issue_type.lower() in incident['issue_type'].lower() or incident['issue_type'].lower() in issue_type.lower():
                         incident_relevance_score += 8
                         incident_matched_keywords.append(f"Issue type match: {incident['issue_type']}")
-                
                 # Check description match
                 if incident.get('description'):
                     description_lower = incident['description'].lower()
-                    
-                    # Check for keyword matches in description
                     for category, keywords in issue_keywords.items():
                         for keyword in keywords:
                             if keyword in description_lower or keyword in query_lower:
                                 incident_relevance_score += 3
                                 incident_matched_keywords.append(f"Keyword match: {keyword}")
                                 break
-                
                 # Check if any keywords from user query match incident description
                 query_words = query_lower.split()
                 for word in query_words:
                     if len(word) > 3 and word in incident.get('description', '').lower():
                         incident_relevance_score += 2
                         incident_matched_keywords.append(f"Word match: {word}")
-                
-                # Add incident if it has sufficient relevance
                 if incident_relevance_score >= 3:
                     incident['relevance_score'] = incident_relevance_score
-                    incident['matched_keywords'] = list(set(incident_matched_keywords))  # Remove duplicates
+                    incident['matched_keywords'] = list(set(incident_matched_keywords))
                     relevant_incidents.append(incident)
-            
-            # Sort by relevance score (highest first)
             relevant_incidents.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
-            
             logger.info(f"Found {len(relevant_incidents)} relevant incidents for query: '{user_query[:50]}...'")
-            for incident in relevant_incidents[:3]:  # Log top 3 matches
+            for incident in relevant_incidents[:3]:
                 logger.info(f"Relevant incident: {incident.get('issue_type')} in {incident.get('area')} (score: {incident.get('relevance_score')})")
-            
             return relevant_incidents
-            
         except Exception as e:
             logger.error(f"Error checking relevant incidents: {e}")
             return []

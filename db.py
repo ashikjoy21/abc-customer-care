@@ -1,77 +1,29 @@
-import json
 import logging
 from typing import Dict, List, Optional, Any
-from config import CUSTOMERS_JSON_PATH
+from supabase_client import SupabaseManager
 from utils import logger
 
 class CustomerDatabaseManager:
-    """Manages customer database operations"""
-    
+    """Manages customer database operations using Supabase"""
     def __init__(self):
-        self.customers: List[Dict[str, Any]] = []
-        self.customer_by_phone: Dict[str, Dict[str, Any]] = {}
-        self.load_from_json()  # Load data immediately
-        
-    def load_from_json(self) -> bool:
-        """Load customer data from JSON file"""
-        try:
-            with open(CUSTOMERS_JSON_PATH, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                
-            # Convert list to dictionary with phone numbers as keys
-            self.customers = []
-            self.customer_by_phone = {}
-            
-            for customer in data:
-                if 'Mobile number' in customer:
-                    phone = customer['Mobile number']
-                    # Handle None or empty values
-                    if phone is None or phone == '':
-                        continue
-                        
-                    try:
-                        # Convert to string and clean
-                        phone = str(phone).strip()
-                        # Remove any decimal points and convert to string
-                        if '.' in phone:
-                            phone = str(int(float(phone)))
-                        # Ensure it's a valid 10-digit number
-                        if not phone.isdigit() or len(phone) != 10:
-                            logger.warning(f"Skipping invalid phone number: {phone}")
-                            continue
-                            
-                        # Store in both lists
-                        self.customers.append(customer)
-                        self.customer_by_phone[phone] = customer
-                        
-                    except (ValueError, TypeError) as e:
-                        logger.warning(f"Skipping invalid phone number format: {phone}, error: {e}")
-                        continue
-            
-            logger.info(f"Loaded {len(self.customers)} customers")
-            return True
-        except Exception as e:
-            logger.error(f"Error loading customer database: {e}")
-            return False
-            
+        self.supabase = SupabaseManager()
+
     def get_customer_by_phone(self, phone: str) -> Optional[Dict[str, Any]]:
-        """Get customer details by phone number"""
+        """Get customer details by phone number from Supabase"""
         try:
-            # Clean and validate phone number
             phone = str(phone).strip()
             if not phone.isdigit() or len(phone) != 10:
                 logger.error(f"Invalid phone number format: {phone}")
                 return None
-                
-            # Direct dictionary lookup
-            customer = self.customer_by_phone.get(phone)
-            if customer:
+            if not self.supabase.client:
+                logger.error("Supabase client not initialized")
+                return None
+            response = self.supabase.client.table('customers').select('*').eq('phone', phone).limit(1).execute()
+            if response.data and len(response.data) > 0:
                 logger.info(f"Found customer with phone: {phone}")
-                return customer
-                
+                return response.data[0]
             logger.warning(f"No customer found with phone: {phone}")
             return None
-            
         except Exception as e:
             logger.error(f"Error searching for customer: {e}")
             return None

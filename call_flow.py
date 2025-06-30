@@ -115,6 +115,7 @@ class CallMemory:
     escalation_reasons: List[str] = field(default_factory=list)
     issue_type: Optional[str] = None
     sub_issues: List[str] = field(default_factory=list)
+    problem_stored: bool = False
     
     def add_troubleshooting_step(self, step: str, result: str):
         """Add a troubleshooting step with timestamp"""
@@ -927,6 +928,9 @@ class ExotelBot:
         self.recording_file = None
         self.recording_path = None
 
+        # In ExotelBot.__init__, after other initializations:
+        self.troubleshooting_engine = TroubleshootingEngine(KNOWLEDGE_BASE_PATH)
+
     def _preload_rag_knowledge(self) -> Dict[str, str]:
         """Preload all RAG knowledge to reduce latency during calls"""
         try:
@@ -1552,9 +1556,11 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             # Update call memory
             if self.call_memory:
                 self.call_memory.add_troubleshooting_step(text, response_text)
-                
                 # Check for escalation triggers
                 await self._check_for_escalation(text, response_text)
+
+            # Store the inferred problem (incident or escalation) once per call
+            await self._store_inferred_problem()
 
         except Exception as e:
             logger.error(f"Error in transcription handling: {e}")
@@ -2111,6 +2117,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                 self.call_memory.phone_number = phone
                 self.call_memory.customer_info = customer_info
                 self.call_memory.customer_name = customer_info.get("name")
+                logger.info(f"Customer name: {self.call_memory.customer_name}")
                 
                 # Log the update
                 logger.info(f"Updated call memory with customer info: {customer_info}")
@@ -2151,43 +2158,19 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             return "നമസ്കാരം"  # General greeting for night
 
     async def validate_phone_number(self, phone_number: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
-        """Validate phone number and get customer info"""
+        """Validate phone number and get customer info from Supabase"""
         try:
             customer = self.db.get_customer_by_phone(phone_number)
             if not customer:
                 logger.warning(f"No customer found for phone: {phone_number}")
                 return False, None
-            
-            logger.info(f"Found customer: {customer.get('Customer Name')} for phone: {phone_number}")
-            
-            # Create customer info dictionary with both old and new field names for compatibility
-            customer_info = {
-                # New format fields
-                "Customer Name": customer.get("Customer Name", "Unknown"),
-                "User Name": customer.get("User Name", "Unknown"),
-                "Address": customer.get("Address", "Unknown"),
-                "Current Plan": customer.get("Current Plan", "Unknown"),
-                "NickName": customer.get("NickName", "Unknown"),
-                "Provider": customer.get("Provider", "Unknown"),
-                "Subscriber Code": customer.get("Subscriber Code", "Unknown"),
-                "Region": customer.get("Region", "Unknown"),
-                "Operator": customer.get("Operator", "Unknown"),
-                
-                # Backward compatibility fields
-                "name": customer.get("Customer Name", "Unknown"),
-                "username": customer.get("User Name", "Unknown"),
-                "plan": customer.get("Current Plan", "Unknown"),
-                "operator": customer.get("Operator", "Unknown"),
-                "isp": customer.get("Provider", "Unknown"),
-                "services": customer.get("Current Plan", "Unknown")  # Use plan as service
-            }
-            
-            # Update call memory with customer info
+            logger.info(f"Found customer: {customer.get('name', customer.get('Customer Name', 'Unknown'))} for phone: {phone_number}")
+            # Store the full customer record (including 'id')
+            customer_info = customer
             if self.call_memory:
                 self.call_memory.customer_info = customer_info
                 self.call_memory.phone_number = phone_number
                 logger.info(f"Updated call memory with customer info for {phone_number}")
-            
             return True, customer_info
         except Exception as e:
             logger.error(f"Error validating phone: {e}")
@@ -2347,6 +2330,45 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         except Exception as e:
             logger.error(f"Error checking for incidents: {e}")
             return []
+
+    async def _store_inferred_problem(self):
+        """Store the inferred problem as an incident or escalation in Supabase based on issue type and sub-issues, only once per call."""
+        if not self.call_memory or getattr(self.call_memory, 'problem_stored', False):
+            return
+        if not self.call_memory.issue_type:
+            transcript = self.call_memory.conversation_history[-1]["user"] if self.call_memory.conversation_history else ""
+            conversation_history = self.call_memory.conversation_history or []
+            classification_result = self.troubleshooting_engine.classify_issue(transcript, conversation_history)
+            self.call_memory.issue_type = classification_result.issue_type
+            self.call_memory.sub_issues = classification_result.sub_issues
+        issue_type = (self.call_memory.issue_type or "").lower()
+        customer_info = self.call_memory.customer_info or {}
+        area = customer_info.get("Region") or customer_info.get("region") or customer_info.get("Area") or customer_info.get("area") or "Unknown"
+        plan = customer_info.get("plan") or customer_info.get("Current Plan") or "Unknown"
+        customer_id = customer_info.get("id")
+        sub_issues = [s.lower() for s in (self.call_memory.sub_issues or [])]
+        incident_sub_issues = ["fiber_cut", "adapter_issue", "power_outage", "area_outage"]
+        if any(sub in sub_issues for sub in incident_sub_issues):
+            self.supabase_manager.create_incident(
+                incident_type=issue_type,
+                location=area,
+                zones="",
+                services=plan,
+                areas="",
+                customer_id=customer_id
+            )
+            self.call_memory.problem_stored = True
+        else:
+            self.supabase_manager.create_escalation(
+                issue_type=issue_type,
+                description=f"{issue_type} reported by {customer_info.get('name', 'Unknown')}",
+                customer_id=customer_id
+            )
+            self.call_memory.problem_stored = True
+
+    # Call this at the end of on_transcription after troubleshooting and before ending the method
+    # Example usage:
+    # await self._store_inferred_problem()
 
 async def handle_client(websocket):
     """Handle a single client connection"""
