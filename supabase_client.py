@@ -4,7 +4,8 @@ import jwt
 import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
-from supabase import create_client, Client
+from supabase import create_client, Client 
+from supabase.lib.client_options import ClientOptions
 from config import SUPABASE_URL, SUPABASE_KEY, SUPABASE_ANON_KEY
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ class SupabaseManager:
             
             # Use the service role key for admin access to bypass RLS
             self.client = create_client(SUPABASE_URL, SUPABASE_KEY)
-            
+        
             # Test the connection with a simple query
             try:
                 # Test with a simple query to verify permissions
@@ -91,14 +92,12 @@ class SupabaseManager:
                 return None
                 
             incident_data = {
-                "type": incident_type.lower(),
-                "location": location.strip(),
+                "area": location.strip(),
+                "issue_type": incident_type.lower(),
+                "description": f"{incident_type.replace('_', ' ').title()} issue in {location} area affecting {services}",
                 "status": "active",
-                "affected_zones": zones,
-                "affected_regions": location,
-                "affected_areas": areas,
-                "affected_services": services,
-                "message_ml": f"{location} പ്രദേശത്ത് {incident_type.replace('_', ' ').title()} സംഭവിച്ചിട്ടുണ്ട്",
+                "priority": "medium",
+                "affected_users": 0,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
@@ -463,6 +462,158 @@ class SupabaseManager:
             logger.error(f"❌ Error testing authentication: {e}")
             return False
 
+    def check_relevant_incidents(self, user_query: str, customer_area: str = None, issue_type: str = None) -> List[Dict[str, Any]]:
+        """Check for relevant incidents based on user query and customer area"""
+        try:
+            if not self.client:
+                logger.error("Supabase client not initialized")
+                return []
+            
+            # Get all active incidents
+            response = self.client.table('incidents').select('*').eq('status', 'active').execute()
+            
+            if not response.data:
+                return []
+            
+            relevant_incidents = []
+            
+            # Keywords to match different types of issues
+            issue_keywords = {
+                'wifi': ['wifi', 'wireless', 'വൈഫൈ', 'വൈ ഫൈ', 'wireless connection'],
+                'internet': ['internet', 'നെറ്റ്', 'ഇന്റർനെറ്റ്', 'connection', 'കണക്ഷൻ'],
+                'speed': ['speed', 'slow', 'വേഗത', 'സ്ലോ', 'bandwidth', 'ബാൻഡ്‌വിഡ്ത്ത്'],
+                'power': ['power', 'പവർ', 'light', 'ലൈറ്റ്', 'adapter', 'അഡാപ്റ്റർ'],
+                'fiber': ['fiber', 'ഫൈബർ', 'cable', 'കേബിൾ', 'optical'],
+                'outage': ['outage', 'ഔട്ടേജ്', 'down', 'ഡൗൺ', 'not working', 'ഇല്ല'],
+                'payment': ['payment', 'പേയ്മെന്റ്', 'bill', 'ബിൽ', 'recharge', 'റീചാർജ്']
+            }
+            
+            # Normalize user query for matching
+            query_lower = user_query.lower()
+            
+            for incident in response.data:
+                incident_relevance_score = 0
+                incident_matched_keywords = []
+                
+                # Check area match (highest priority)
+                if customer_area and incident.get('area'):
+                    if customer_area.lower() in incident['area'].lower() or incident['area'].lower() in customer_area.lower():
+                        incident_relevance_score += 10
+                        incident_matched_keywords.append(f"Area match: {incident['area']}")
+                
+                # Check issue type match
+                if incident.get('issue_type') and issue_type:
+                    if issue_type.lower() in incident['issue_type'].lower() or incident['issue_type'].lower() in issue_type.lower():
+                        incident_relevance_score += 8
+                        incident_matched_keywords.append(f"Issue type match: {incident['issue_type']}")
+                
+                # Check description match
+                if incident.get('description'):
+                    description_lower = incident['description'].lower()
+                    
+                    # Check for keyword matches in description
+                    for category, keywords in issue_keywords.items():
+                        for keyword in keywords:
+                            if keyword in description_lower or keyword in query_lower:
+                                incident_relevance_score += 3
+                                incident_matched_keywords.append(f"Keyword match: {keyword}")
+                                break
+                
+                # Check if any keywords from user query match incident description
+                query_words = query_lower.split()
+                for word in query_words:
+                    if len(word) > 3 and word in incident.get('description', '').lower():
+                        incident_relevance_score += 2
+                        incident_matched_keywords.append(f"Word match: {word}")
+                
+                # Add incident if it has sufficient relevance
+                if incident_relevance_score >= 3:
+                    incident['relevance_score'] = incident_relevance_score
+                    incident['matched_keywords'] = list(set(incident_matched_keywords))  # Remove duplicates
+                    relevant_incidents.append(incident)
+            
+            # Sort by relevance score (highest first)
+            relevant_incidents.sort(key=lambda x: x.get('relevance_score', 0), reverse=True)
+            
+            logger.info(f"Found {len(relevant_incidents)} relevant incidents for query: '{user_query[:50]}...'")
+            for incident in relevant_incidents[:3]:  # Log top 3 matches
+                logger.info(f"Relevant incident: {incident.get('issue_type')} in {incident.get('area')} (score: {incident.get('relevance_score')})")
+            
+            return relevant_incidents
+            
+        except Exception as e:
+            logger.error(f"Error checking relevant incidents: {e}")
+            return []
+
+    def get_incident_summary_for_customer(self, incidents: List[Dict[str, Any]]) -> str:
+        """Generate a customer-friendly summary of relevant incidents"""
+        if not incidents:
+            return ""
+        
+        # Group incidents by area
+        area_incidents = {}
+        for incident in incidents:
+            area = incident.get('area', 'Unknown Area')
+            if area not in area_incidents:
+                area_incidents[area] = []
+            area_incidents[area].append(incident)
+        
+        summary_parts = []
+        
+        for area, area_incident_list in area_incidents.items():
+            # Get the highest priority incident for this area
+            highest_priority = max(area_incident_list, key=lambda x: x.get('priority', 'medium'))
+            
+            priority_text = {
+                'low': 'ചെറിയ',
+                'medium': 'ഒരു',
+                'high': 'ഒരു പ്രധാന',
+                'critical': 'ഒരു നിർണായക'
+            }.get(highest_priority.get('priority', 'medium'), 'ഒരു')
+            
+            issue_type = highest_priority.get('issue_type', 'പ്രശ്നം')
+            
+            # Convert English issue types to Malayalam
+            issue_translations = {
+                'fiber cut': 'ഫൈബർ കട്ട്',
+                'power outage': 'പവർ ഔട്ടേജ്',
+                'equipment failure': 'ഉപകരണ പരാജയം',
+                'network issue': 'നെറ്റ്‌വർക്ക് പ്രശ്നം',
+                'wifi issue': 'വൈഫൈ പ്രശ്നം',
+                'speed issue': 'വേഗത പ്രശ്നം',
+                'connection issue': 'കണക്ഷൻ പ്രശ്നം',
+                'outage': 'ഔട്ടേജ്',
+                'maintenance': 'പരിപാലനം'
+            }
+            
+            malayalam_issue = issue_translations.get(issue_type.lower(), issue_type)
+            
+            # Add estimated resolution if available
+            resolution_info = ""
+            if highest_priority.get('estimated_resolution'):
+                try:
+                    est_time_str = highest_priority['estimated_resolution']
+                    if est_time_str and isinstance(est_time_str, str):
+                        est_time = datetime.fromisoformat(est_time_str.replace('Z', '+00:00'))
+                        # Format as relative time
+                        now = datetime.now(timezone.utc)
+                        time_diff = est_time - now
+                        if time_diff.total_seconds() > 0:
+                            hours = int(time_diff.total_seconds() // 3600)
+                            if hours > 0:
+                                resolution_info = f" ഏകദേശം {hours} മണിക്കൂർ കൊണ്ട് പരിഹരിക്കാം"
+                            else:
+                                resolution_info = " ഉടൻ തന്നെ പരിഹരിക്കാം"
+                except:
+                    pass
+            
+            summary_parts.append(f"{area} പ്രദേശത്ത് {priority_text} {malayalam_issue} റിപ്പോർട്ട് ചെയ്തിട്ടുണ്ട്{resolution_info}.")
+        
+        if summary_parts:
+            return " ".join(summary_parts)
+        
+        return ""
+
 # Global Supabase manager instance
 supabase_manager = SupabaseManager()
 
@@ -489,4 +640,26 @@ def create_escalation_entry(
     """Create escalation entry in Supabase"""
     return supabase_manager.create_escalation(
         issue_type, description, priority, customer_id, escalated_by, assigned_to
-    ) 
+    )
+
+def ml_to_en_tech_terms(text: str) -> str:
+    mapping = {
+        "ഫൈബർ": "fiber",
+        "കട്ട്": "cut",
+        "കേബിൾ": "cable",
+        "പവർ": "power",
+        "ലൈറ്റ്": "light",
+        "ചുവപ്പ്": "red",
+        "വൈഫൈ": "wifi",
+        "ഇന്റർനെറ്റ്": "internet",
+        "കണക്ഷൻ": "connection",
+        "വേഗത": "speed",
+        "സ്ലോ": "slow",
+        "ഡൗൺ": "down",
+        "പ്രശ്നം": "issue",
+        "ഔട്ടേജ്": "outage",
+        "അഡാപ്റ്റർ": "adapter",
+    }
+    for ml, en in mapping.items():
+        text = text.replace(ml, en)
+    return text 

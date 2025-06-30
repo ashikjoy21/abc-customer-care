@@ -1403,6 +1403,9 @@ class ExotelBot:
             # Start RAG context fetching immediately and in parallel
             rag_task = asyncio.create_task(self._get_rag_context(text))
             
+            # Check for relevant incidents early in the conversation
+            incident_task = asyncio.create_task(self._check_for_incidents(text))
+            
             # Get model context with customer info
             model_context = self.call_memory.get_model_context() if self.call_memory else ""
             customer_name = self.call_memory.customer_name if self.call_memory else "Customer"
@@ -1483,6 +1486,48 @@ Technical Reference (use ONLY as a guide, not a script to follow):
                 # If RAG lookup takes too long, proceed without it
                 logger.info(f"RAG context timed out after {time.time() - start_time:.3f}s, proceeding without it")
                 prompt = base_prompt + instructions
+            
+            # Check for incidents and handle them if found
+            try:
+                relevant_incidents = await asyncio.wait_for(incident_task, 0.5)
+                if relevant_incidents:
+                    # Found relevant incidents - inform customer about them
+                    logger.info(f"Found {len(relevant_incidents)} relevant incidents, informing customer")
+                    
+                    # Generate incident summary for customer
+                    incident_summary = self.supabase_manager.get_incident_summary_for_customer(relevant_incidents)
+                    
+                    if incident_summary:
+                        # Inform customer about the incident
+                        incident_message = (
+                            f"നിങ്ങളുടെ പ്രശ്നത്തെക്കുറിച്ച് ഞാൻ പരിശോധിച്ചു. "
+                            f"{incident_summary} "
+                            f"ഞങ്ങളുടെ ടെക്നീഷ്യൻ ടീം ഇത് പരിഹരിക്കാൻ ശ്രമിക്കുന്നുണ്ട്. "
+                            f"ദയവായി കുറച്ച് സമയം കാത്തിരിക്കൂ. "
+                            f"ഇത് പരിഹരിക്കപ്പെടുമ്പോൾ നിങ്ങൾക്ക് സ്വയമേവ അറിയിക്കാം."
+                        )
+                        
+                        await self.play_message(incident_message)
+                        
+                        # Update call memory to indicate incident was found
+                        self.call_memory.area_issue_status = "incident_reported"
+                        self.call_memory.resolution_notes = f"Customer informed about existing incident: {incident_summary}"
+                        
+                        # Add response to conversation history
+                        self.conversation_history[-1]["bot"] = incident_message
+                        
+                        # Update call memory
+                        if self.call_memory:
+                            self.call_memory.add_troubleshooting_step(text, incident_message)
+                        
+                        # Don't proceed with normal response - incident information is sufficient
+                        return
+                        
+            except asyncio.TimeoutError:
+                # If incident check takes too long, proceed with normal response
+                logger.info(f"Incident check timed out after {time.time() - start_time:.3f}s, proceeding with normal response")
+            except Exception as e:
+                logger.error(f"Error checking incidents: {e}")
             
             # Record time before making Gemini call
             pre_gemini_time = time.time()
@@ -1731,6 +1776,43 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             )
             
             if should_escalate:
+                # BEFORE escalating, check for relevant incidents
+                customer_area = customer_info.get('Region') or customer_info.get('region') or customer_info.get('Area') or customer_info.get('area')
+                
+                # Check for relevant incidents
+                relevant_incidents = self.supabase_manager.check_relevant_incidents(
+                    user_query=user_text,
+                    customer_area=customer_area,
+                    issue_type=issue_type
+                )
+                
+                if relevant_incidents:
+                    # Found relevant incidents - inform customer instead of escalating
+                    logger.info(f"Found {len(relevant_incidents)} relevant incidents, informing customer instead of escalating")
+                    
+                    # Generate incident summary for customer
+                    incident_summary = self.supabase_manager.get_incident_summary_for_customer(relevant_incidents)
+                    
+                    if incident_summary:
+                        # Inform customer about the incident
+                        incident_message = (
+                            f"നിങ്ങളുടെ പ്രശ്നത്തെക്കുറിച്ച് ഞാൻ പരിശോധിച്ചു. "
+                            f"{incident_summary} "
+                            f"ഞങ്ങളുടെ ടെക്നീഷ്യൻ ടീം ഇത് പരിഹരിക്കാൻ ശ്രമിക്കുന്നുണ്ട്. "
+                            f"ദയവായി കുറച്ച് സമയം കാത്തിരിക്കൂ. "
+                            f"ഇത് പരിഹരിക്കപ്പെടുമ്പോൾ നിങ്ങൾക്ക് സ്വയമേവ അറിയിക്കാം."
+                        )
+                        
+                        await self.play_message(incident_message)
+                        
+                        # Update call memory to indicate incident was found
+                        self.call_memory.area_issue_status = "incident_reported"
+                        self.call_memory.resolution_notes = f"Customer informed about existing incident: {incident_summary}"
+                        
+                        # Don't escalate - the incident information is sufficient
+                        return
+                
+                # No relevant incidents found - proceed with normal escalation
                 # Get escalation reasons
                 escalation_reasons = self.escalation_manager.get_escalation_reasons()
                 
@@ -2230,6 +2312,41 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         # Continue with normal processing if not red light or power issue
         # For now, return a default response
         return "ക്ഷമിക്കണം, എനിക്ക് നിങ്ങളുടെ പ്രശ്നം മനസ്സിലായില്ല. ദയവായി വീണ്ടും വിവരിക്കാമോ?"
+
+    async def _check_for_incidents(self, user_text: str) -> List[Dict[str, Any]]:
+        """Check for relevant incidents based on user query and customer area"""
+        try:
+            if not hasattr(self, 'supabase_manager') or not self.supabase_manager:
+                return []
+            
+            # Get customer area from call memory
+            customer_area = None
+            if self.call_memory and self.call_memory.customer_info:
+                customer_area = (
+                    self.call_memory.customer_info.get('Region') or 
+                    self.call_memory.customer_info.get('region') or 
+                    self.call_memory.customer_info.get('Area') or 
+                    self.call_memory.customer_info.get('area')
+                )
+            
+            # Get issue type from call memory if available
+            issue_type = None
+            if self.call_memory:
+                issue_type = self.call_memory.issue_type
+            
+            # Check for relevant incidents
+            relevant_incidents = self.supabase_manager.check_relevant_incidents(
+                user_query=user_text,
+                customer_area=customer_area,
+                issue_type=issue_type
+            )
+            
+            logger.info(f"Found {len(relevant_incidents)} relevant incidents for query: '{user_text[:50]}...'")
+            return relevant_incidents
+            
+        except Exception as e:
+            logger.error(f"Error checking for incidents: {e}")
+            return []
 
 async def handle_client(websocket):
     """Handle a single client connection"""
