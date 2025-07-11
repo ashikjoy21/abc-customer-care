@@ -32,6 +32,7 @@ class CallMemoryEnhanced:
     """Enhanced version of CallMemory with improved troubleshooting capabilities"""
     call_id: str
     phone_number: Optional[str] = None
+    caller_phone: Optional[str] = None  # Added field for caller's phone number
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     device_type: Optional[str] = "fiber_modem"  # Default device type
@@ -235,6 +236,7 @@ class CallMemoryEnhanced:
         return {
             "call_id": self.call_id,
             "phone_number": self.phone_number,
+            "caller_phone": self.caller_phone,  # Include caller_phone in summary
             "customer_name": self.customer_name,
             "duration_seconds": self.get_call_duration(),
             "start_time": self.start_time.isoformat(),

@@ -259,7 +259,8 @@ class TelegramBotManager:
         resolution: str,
         duration: int,
         was_resolved: bool,
-        troubleshooting_steps: List[str] = None
+        troubleshooting_steps: List[str] = None,
+        caller_phone: Optional[str] = None
     ) -> None:
         """Send a call report to the operator."""
         if not self.bot_token or not self.operator_chat_id:
@@ -287,7 +288,17 @@ class TelegramBotManager:
             # Format the message without Markdown in critical fields
             message = (
                 f"📞 Call Report\n\n"
-                f"Phone: {phone or 'Unknown'}\n"
+            )
+            
+            # Add phone numbers section
+            if caller_phone:
+                message += f"Called From: {caller_phone}\n"
+            if phone:
+                message += f"Registered Phone: {phone}\n"
+            if not caller_phone and not phone:
+                message += "Phone: Unknown\n"
+                
+            message += (
                 f"Status: {call_status}\n"
                 f"Duration: {duration_str}\n"
                 f"Resolved: {'Yes' if was_resolved else 'No'}\n\n"

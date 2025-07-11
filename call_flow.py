@@ -96,6 +96,7 @@ class TroubleshootingStep:
 class CallMemory:
     call_id: str
     phone_number: Optional[str] = None
+    caller_phone: Optional[str] = None  # Added field for caller's phone number
     customer_id: Optional[str] = None
     customer_name: Optional[str] = None
     device_type: Optional[str] = "fiber_modem"  # Default device type
@@ -133,6 +134,7 @@ class CallMemory:
         return {
             "call_id": self.call_id,
             "phone_number": self.phone_number,
+            "caller_phone": self.caller_phone,  # Include caller_phone in summary
             "customer_name": self.customer_name,
             "duration_seconds": self.get_call_duration(),
             "start_time": self.start_time.isoformat(),
@@ -905,6 +907,33 @@ class ExotelBot:
         self.recording_file = None
         self.recording_path = None
 
+    async def query_gemini(self, text: str, context: str="", max_tokens: int = None) -> str:
+        """Call the global query_gemini function with the bot's chat session and lock"""
+        try:
+            # Check if chat_session is initialized
+            if not self.chat_session:
+                logger.warning("Chat session not initialized, reinitializing...")
+                try:
+                    gemini_model = genai.GenerativeModel("gemini-2.0-flash-lite")
+                    self.chat_session = gemini_model.start_chat(history=[
+                        {
+                            "role": "user",
+                            "parts": [
+                                "You are a Malayalam-speaking support bot for an internet service provider.You help customers with issues related to internet connection problems, slow speed, payment issues, and billing queries. Always reply only in Malayalam, using short, clear, and friendly sentences. Be warm, patient, and empathetic in every interaction."
+                            ]
+                        }
+                    ])
+                    logger.info("Chat session reinitialized successfully")
+                except Exception as e:
+                    logger.error(f"Error reinitializing chat session: {e}")
+                    return "ക്ഷമിക്കണം, എനിക്ക് ഒരു ചെറിയ പ്രശ്നം നേരിട്ടു. ഒരു നിമിഷം കാത്തിരിക്കാമോ?"
+            
+            # Call the global query_gemini function
+            return await query_gemini(text, self.chat_session, self.gemini_lock, context)
+        except Exception as e:
+            logger.error(f"Error in query_gemini: {e}")
+            return "ക്ഷമിക്കണം, എനിക്ക് ഒരു ചെറിയ പ്രശ്നം നേരിട്ടു. ഒരു നിമിഷം കാത്തിരിക്കാമോ?"
+        
     def _preload_rag_knowledge(self) -> Dict[str, str]:
         """Preload all RAG knowledge to reduce latency during calls"""
         try:
@@ -1041,7 +1070,7 @@ class ExotelBot:
     def _reset_state(self):
         """Reset all state variables for a new call"""
         self.call_active = False
-        self.call_id = None
+        # Don't reset call_id to None here, as it causes issues with CallMemory initialization
         self.customer_info = None
         self.phone_collector.reset()
         self.last_message = None
@@ -1054,17 +1083,23 @@ class ExotelBot:
             self.transcriber.stop()
             self.transcriber = None
             
-        gemini_model = genai.GenerativeModel("gemini-2.0-flash-lite")
-        self.chat_session = gemini_model.start_chat(history=[
-            {
-                "role": "user",
-                "parts": [
-                    "You are a Malayalam-speaking support bot for an internet service provider.You help customers with issues related to internet connection problems, slow speed, payment issues, and billing queries. Always reply only in Malayalam, using short, clear, and friendly sentences. Be warm, patient, and empathetic in every interaction."
-                ]
-            }
-        ])
+        # Initialize Gemini model and chat session
+        try:
+            gemini_model = genai.GenerativeModel("gemini-2.0-flash-lite")
+            self.chat_session = gemini_model.start_chat(history=[
+                {
+                    "role": "user",
+                    "parts": [
+                        "You are a Malayalam-speaking support bot for an internet service provider.You help customers with issues related to internet connection problems, slow speed, payment issues, and billing queries. Always reply only in Malayalam, using short, clear, and friendly sentences. Be warm, patient, and empathetic in every interaction."
+                    ]
+                }
+            ])
+            logger.info("Chat session initialized successfully")
+        except Exception as e:
+            logger.error(f"Error initializing chat session: {e}")
+            self.chat_session = None
+            
         logger.info("Bot state reset for new call")
-        self.call_memory = CallMemory(call_id=self.call_id)
         self.waiting_for_phone = True
 
     async def play_message(self, text: str):
@@ -1158,8 +1193,20 @@ class ExotelBot:
                 self._reset_state()
                 self.call_id = f"call_{int(time.time())}"
                 self.call_active = True
+                # Initialize call memory with the call_id
                 self.call_memory = CallMemory(call_id=self.call_id)
                 logger.info(f"Call started: {self.call_id}")
+                
+                # Extract caller's phone number from start event data
+                start_data = data.get("start", {})
+                if start_data and "from" in start_data:
+                    caller_phone = start_data.get("from")
+                    # Remove leading zero if present for standardization
+                    if caller_phone and caller_phone.startswith("0"):
+                        caller_phone = caller_phone[1:]
+                    self.call_memory.caller_phone = caller_phone
+                    logger.info(f"Found caller phone in start.from: {start_data.get('from')}")
+                    logger.info(f"Captured caller phone number: {caller_phone}")
                 
                 # Start recording the call
                 self._start_recording()
@@ -1458,7 +1505,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             logger.debug(f"Prompt preparation completed in {pre_gemini_time - start_time:.3f}s")
             
             # Get AI response with streaming
-            response_text = await query_gemini(prompt, self.chat_session, self.gemini_lock)
+            response_text = await self.query_gemini(prompt, model_context, max_tokens=200)
             
             # Log time for Gemini response
             post_gemini_time = time.time()
@@ -1667,26 +1714,34 @@ Technical Reference (use ONLY as a guide, not a script to follow):
     async def check_if_phone_needed(self, text: str, rag_context: str) -> bool:
         """Check if phone number is needed"""
         try:
-            response = await query_gemini(
+            response = await self.query_gemini(
                 f"User said: {text}\nContext: {rag_context}\n\n"
                 "Should I ask for phone number? Answer only yes or no.",
-                self.chat_session,
-                self.gemini_lock
+                rag_context
             )
             return "yes" in response.lower()
         except Exception as e:
-            logger.error(f"Error checking phone need: {e}")
-            return True
+            logger.error(f"Error checking if phone needed: {e}")
+            return False
 
     async def _send_call_summary(self):
         """Send call summary to Telegram"""
         try:
-            if not self.telegram_bot:
-                logger.warning("Telegram bot not configured, skipping call summary")
-                return
-                
-            # Get customer info
-            customer_info = self.call_memory.customer_info or {}
+            # Generate summaries based on the conversation history
+            logger.info("Generating call summary...")
+            
+            # Extract customer info if available
+            customer_info = {}
+            if self.call_memory and self.call_memory.customer_info:
+                customer_info = self.call_memory.customer_info
+            else:
+                # Fallback to basic customer info
+                customer_info = {
+                    "Customer Name": "Unknown",
+                    "Provider": "Unknown",
+                    "Region": "Unknown",
+                    "Operator": "Unknown"
+                }
             
             # Get FULL conversation history
             conversation_history = self.call_memory.conversation_history or []
@@ -1726,65 +1781,95 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             # Get the FULL context from the call memory
             context = self.call_memory.get_model_context()
             
-            # Generate issue description, call summary, and steps tried using LLM
-            issue_summary = await query_gemini(issue_prompt, self.chat_session, self.gemini_lock, context)
-            call_summary = await query_gemini(summary_prompt, self.chat_session, self.gemini_lock, context)
+            # Default values in case we can't get AI-generated summaries
+            issue_summary = "Unknown"
+            call_summary = "Call with customer to resolve technical issues"
+            resolution_status = "Unresolved"
             
-            # Only generate steps if we don't have explicit troubleshooting steps recorded
-            if not troubleshooting_steps:
-                steps_tried = await query_gemini(steps_prompt, self.chat_session, self.gemini_lock, context)
-                # Convert to list
-                steps_list = [step.strip() for step in steps_tried.split('\n') if step.strip()]
-                # Filter out any non-step lines (sometimes LLM adds explanatory text)
-                steps_list = [step for step in steps_list if not step.startswith("Note:") and not step.startswith("*")]
-                troubleshooting_steps = steps_list
-            
-            # Limit response length but allow for more detailed summaries
-            issue_summary = _limit_response_length(issue_summary, 100)
-            call_summary = _limit_response_length(call_summary, 500)  # Increased from 300 to 500
-            
-            # Determine resolution status
-            if self.call_memory.status == CallStatus.RESOLVED:
-                resolution_status = "Issue resolved successfully"
-            elif self.call_memory.status == CallStatus.ESCALATED:
-                resolution_status = "Issue escalated to human operator"
-            else:
-                resolution_status = "Call ended without resolution"
-                
-            # Add resolution notes if available
-            if self.call_memory.resolution_notes:
-                resolution_status += f": {self.call_memory.resolution_notes}"
-            
-            # Ensure customer info is properly set
-            if not customer_info and self.call_memory.phone_number:
-                # Try to get customer info again if missing
-                _, customer_info = await self.validate_phone_number(self.call_memory.phone_number)
-                customer_info = customer_info or {}
-            
-            # Log the final customer info being sent
-            logger.info(f"Sending call report with customer info: {customer_info}")
-            
-            # Select the most relevant transcripts based on technical content
-            if len(recent_transcripts) > 3:
-                # Filter for technical terms to find the most relevant statements
-                technical_statements = []
-                for transcript in recent_transcripts:
-                    terms = self.extract_technical_terms(transcript)
-                    if terms:
-                        technical_statements.append((transcript, len(terms)))
-                
-                # Sort by number of technical terms (most to least)
-                technical_statements.sort(key=lambda x: x[1], reverse=True)
-                
-                # Take the top 3 most technical statements
-                if technical_statements:
-                    recent_transcripts = [s[0] for s in technical_statements[:3]]
+            try:
+                # Get concise issue description first
+                issue_summary = await self.query_gemini(issue_prompt, context, max_tokens=30)
+                # Get a comprehensive call summary
+                call_summary = await self.query_gemini(summary_prompt, context, max_tokens=200)
+                # Get resolution status
+                if self.call_memory.status == CallStatus.RESOLVED:
+                    resolution_status = "✅ Issue resolved."
+                elif self.call_memory.status == CallStatus.ESCALATED:
+                    resolution_status = "⚠️ Issue escalated to technical team."
                 else:
-                    # If no technical statements, take the 3 most recent
-                    recent_transcripts = recent_transcripts[-3:]
+                    resolution_status = "❓ Issue status unclear, follow up required."
+            except Exception as e:
+                logger.error(f"Error generating AI summaries: {e}")
+                # Use fallback summaries
+                if self.call_memory.status == CallStatus.RESOLVED:
+                    issue_summary = "Technical issue"
+                    resolution_status = "Issue resolved"
+                elif self.call_memory.status == CallStatus.ESCALATED:
+                    issue_summary = "Complex technical issue"
+                    resolution_status = "Issue escalated to technical team"
+                else:
+                    issue_summary = "Internet/connectivity issue"
+                    resolution_status = "Issue status unclear"
+
+            # Extract the most technical statements for display
+            if recent_transcripts:
+                try:
+                    technical_prompt = (
+                        "For each statement from a customer support call below, rate each statement from 0-10 based on how technically meaningful it is for troubleshooting. "
+                        "Return only the list of numbers, one score per statement."
+                    )
+                    statements_text = "\n".join([f"{i+1}. {text}" for i, text in enumerate(recent_transcripts)])
+                    response = await self.query_gemini(technical_prompt, statements_text, max_tokens=100)
+                    
+                    # Parse scores - handle various formats
+                    scores = []
+                    try:
+                        # Try parsing as a list of numbers
+                        if '[' in response and ']' in response:
+                            import re
+                            scores_text = re.search(r'\[(.*?)\]', response).group(1)
+                            scores = [float(score.strip()) for score in scores_text.split(',')]
+                        else:
+                            # Try parsing line by line
+                            lines = response.strip().split('\n')
+                            scores = []
+                            for line in lines:
+                                matches = re.findall(r'\d+\.?\d*', line)
+                                if matches:
+                                    scores.append(float(matches[0]))
+                    except Exception:
+                        # Fallback: try to extract numbers, one per line
+                        try:
+                            lines = response.strip().split('\n')
+                            scores = []
+                            for line in lines:
+                                parts = line.split(':')
+                                if len(parts) > 1:
+                                    score_part = parts[1].strip()
+                                    score = float(re.search(r'\d+\.?\d*', score_part).group())
+                                    scores.append(score)
+                        except Exception:
+                            # Last resort: just use sequential numbers
+                            scores = list(range(len(recent_transcripts), 0, -1))
+                    
+                    # Pair statements with scores
+                    technical_statements = list(zip(recent_transcripts[:len(scores)], scores))
+                    
+                    # Sort by technical score
+                    technical_statements.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # Take the top 3 most technical statements
+                    if technical_statements:
+                        recent_transcripts = [s[0] for s in technical_statements[:3]]
+                    else:
+                        # If no technical statements, take the 3 most recent
+                        recent_transcripts = recent_transcripts[-3:]
+                except Exception as e:
+                    logger.error(f"Error processing technical statements: {e}")
             
             await self.telegram_bot.send_call_report(
                 phone=self.call_memory.phone_number,
+                caller_phone=self.call_memory.caller_phone,  # Include the caller's phone number
                 issue=issue_summary,  # Concise issue description
                 call_summary=call_summary,  # Detailed call summary
                 recent_transcripts=recent_transcripts,
@@ -1807,7 +1892,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
         except Exception as e:
             logger.error(f"Error sending call summary: {e}")
             logger.error(f"Call memory state: {self.call_memory.generate_summary() if self.call_memory else 'No call memory'}")
-            
+    
     async def handle_dtmf(self, digit: str):
         """Handle DTMF input"""
         try:
@@ -2078,8 +2163,10 @@ async def handle_client(websocket):
 async def main():
     """Start the voicebot server"""
     try:
-        async with websockets.serve(handle_client, "localhost", 8765):
-            logger.info("🚀 Voicebot server started on ws://localhost:8765")
+        # Start the WebSocket server
+        logger.info("Starting WebSocket server...")
+        async with websockets.serve(handle_client, "0.0.0.0", 8765):
+            logger.info("🚀 Voicebot server started on ws://0.0.0.0:8765")
             await asyncio.Future()  # run forever
     except Exception as e:
         logger.error(f"Error starting server: {e}")

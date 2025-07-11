@@ -289,6 +289,17 @@ class ExotelBotEnhanced:
                 self.call_memory = CallMemoryEnhanced(call_id=self.call_id)
                 logger.info(f"Call started: {self.call_id}")
                 
+                # Extract caller's phone number from start event data
+                start_data = data.get("start", {})
+                if start_data and "from" in start_data:
+                    caller_phone = start_data.get("from")
+                    # Remove leading zero if present for standardization
+                    if caller_phone and caller_phone.startswith("0"):
+                        caller_phone = caller_phone[1:]
+                    self.call_memory.caller_phone = caller_phone
+                    logger.info(f"Found caller phone in start.from: {start_data.get('from')}")
+                    logger.info(f"Captured caller phone number: {caller_phone}")
+                
                 # Start recording the call
                 self._start_recording()
                 
@@ -583,10 +594,9 @@ class ExotelBotEnhanced:
         """Send call summary to Telegram"""
         try:
             if not self.call_memory:
-                logger.warning("Cannot send call summary: call memory not initialized")
+                logger.warning("No call memory available for summary")
                 return
                 
-            # Generate summary
             summary = self.call_memory.generate_summary()
             
             # Add troubleshooting summary if available
@@ -596,7 +606,15 @@ class ExotelBotEnhanced:
             
             # Format message
             message = f"📞 Call Summary: {self.call_id}\n"
-            message += f"📱 Phone: {summary.get('phone_number', 'Unknown')}\n"
+            
+            # Add both phone numbers
+            if summary.get("caller_phone"):
+                message += f"📱 Called From: {summary.get('caller_phone')}\n"
+            if summary.get("phone_number"):
+                message += f"📱 Registered Phone: {summary.get('phone_number')}\n"
+            if not summary.get("caller_phone") and not summary.get("phone_number"):
+                message += f"📱 Phone: Unknown\n"
+                
             message += f"👤 Customer: {summary.get('customer_name', 'Unknown')}\n"
             message += f"⏱️ Duration: {summary.get('duration_seconds', 0)} seconds\n"
             message += f"📊 Status: {summary.get('status', 'Unknown')}\n"
