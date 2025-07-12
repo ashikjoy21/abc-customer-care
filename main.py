@@ -3,6 +3,7 @@ import logging
 from typing import Optional
 import redis
 from loguru import logger
+import time
 
 from config import (
     REDIS_HOST,
@@ -13,8 +14,9 @@ from config import (
 )
 from db import CustomerDatabaseManager
 from telegram_notifier import TelegramBotManager
-from call_flow import main as start_voicebot
+from api_server import run_api_server
 from utils import check_redis
+from call_flow import ExotelBot
 
 # Configure logging
 logger.remove()  # Remove default handler
@@ -26,6 +28,26 @@ logger.add(
     format=LOG_FORMAT
 )
 logger.add(lambda msg: print(msg), level=LOG_LEVEL, format=LOG_FORMAT)
+
+# Preload resources to reduce lag
+def preload_resources():
+    """Preload resources to reduce lag during calls"""
+    try:
+        logger.info("Preloading resources to reduce lag...")
+        start_time = time.time()
+        
+        # Initialize a bot instance to trigger resource loading
+        bot = ExotelBot()
+        
+        # Force initialization of all expensive components
+        _ = bot.preloaded_rag_data  # Trigger RAG knowledge preloading
+        
+        # Initialize Gemini model
+        bot.chat_session  # Trigger chat session initialization
+        
+        logger.info(f"✅ Resources preloaded successfully in {time.time() - start_time:.2f}s")
+    except Exception as e:
+        logger.error(f"Error preloading resources: {e}")
 
 class Application:
     """Main application class"""
@@ -54,9 +76,12 @@ class Application:
             self.db = CustomerDatabaseManager()
             self.db.load_from_json()
             
-            # Initialize Telegram bot
-            self.telegram_bot = TelegramBotManager()
+            # Initialize Telegram bot using the singleton pattern
+            self.telegram_bot = TelegramBotManager.get_instance()
             await self.telegram_bot.start()
+            
+            # Preload resources to reduce lag
+            preload_resources()
             
             logger.info("✅ Application initialized successfully")
             
@@ -83,8 +108,8 @@ class Application:
         try:
             await self.initialize()
             
-            # Start voicebot server
-            await start_voicebot()
+            # Start the combined API server (handles both HTTP and WebSocket)
+            await run_api_server()
             
         except Exception as e:
             logger.error(f"Application error: {e}")

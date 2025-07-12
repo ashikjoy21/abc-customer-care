@@ -11,6 +11,9 @@ from datetime import datetime
 # Load environment variables
 load_dotenv()
 
+# Global instance for singleton pattern
+_bot_instance = None
+
 class TelegramBotManager:
     """
     Manages Telegram bot operations for operator notifications and call reporting.
@@ -21,6 +24,7 @@ class TelegramBotManager:
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.operator_chat_id = os.getenv("TELEGRAM_OPERATOR_CHAT_ID")
         self.application = None
+        self.bot = None  # Direct bot instance for sending messages
         
         # Initialize Redis client
         try:
@@ -36,6 +40,14 @@ class TelegramBotManager:
         except Exception as e:
             self.logger.error(f"❌ Failed to connect to Redis: {e}")
             self.redis_client = None
+
+    @staticmethod
+    def get_instance():
+        """Get singleton instance of TelegramBotManager"""
+        global _bot_instance
+        if _bot_instance is None:
+            _bot_instance = TelegramBotManager()
+        return _bot_instance
 
     def _generate_incident_id(self, incident_type: str, location: str) -> str:
         """Generate a simple incident ID."""
@@ -56,26 +68,15 @@ class TelegramBotManager:
             raise RuntimeError("Redis connection failed")
 
         try:
-            # Create application
-            self.application = ApplicationBuilder().token(self.bot_token).build()
+            # Initialize direct bot instance for sending messages without polling
+            self.bot = Bot(token=self.bot_token)
             
-            # Add command handlers
-            self.application.add_handler(CommandHandler("start", self._start_command))
-            self.application.add_handler(CommandHandler("help", self._help_command))
-            self.application.add_handler(CommandHandler("status", self._status_command))
-            self.application.add_handler(CommandHandler("incidents", self._incidents_command))
-            self.application.add_handler(CommandHandler("resolve", self._resolve_command))
+            # Test connection
+            me = await self.bot.get_me()
+            self.logger.info(f"Application started")
             
-            # Add callback query handler for incident resolution
-            self.application.add_handler(CallbackQueryHandler(self._handle_callback))
-            
-            # Add message handler for regular text messages
-            self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message))
-            
-            # Start the bot
-            await self.application.initialize()
-            await self.application.start()
-            await self.application.updater.start_polling()
+            # Delete webhook to ensure clean start
+            await self.bot.delete_webhook()
             
             self.is_running = True
             self.logger.info("Telegram bot started successfully")
@@ -87,12 +88,12 @@ class TelegramBotManager:
 
     async def stop(self) -> None:
         """Stop the Telegram bot."""
-        if self.application:
-            await self.application.updater.stop()
-            await self.application.stop()
-            await self.application.shutdown()
         self.is_running = False
         self.logger.info("Telegram bot stopped")
+        
+        # Clear the singleton instance
+        global _bot_instance
+        _bot_instance = None
 
     async def _get_active_incidents(self) -> List[Dict[str, Any]]:
         """Get all active incidents from Redis."""
@@ -268,7 +269,9 @@ class TelegramBotManager:
             return
 
         try:
-            bot = Bot(token=self.bot_token)
+            # Use the instance's bot object instead of creating a new one
+            if not self.bot:
+                self.bot = Bot(token=self.bot_token)
             
             # Format duration
             minutes = int(duration // 60)
@@ -344,7 +347,7 @@ class TelegramBotManager:
                     message += f"• {escape_markdown(transcript)}\n"
             
             # Send message without parse_mode to avoid Markdown parsing errors
-            await bot.send_message(
+            await self.bot.send_message(
                 chat_id=self.operator_chat_id,
                 text=message
             )
@@ -356,7 +359,9 @@ class TelegramBotManager:
             # Try sending a simplified message if the formatted one failed
             try:
                 simple_message = f"Call report for {phone}: {issue} - {resolution}"
-                await bot.send_message(
+                if not self.bot:
+                    self.bot = Bot(token=self.bot_token)
+                await self.bot.send_message(
                     chat_id=self.operator_chat_id,
                     text=simple_message
                 )

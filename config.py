@@ -33,6 +33,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 (DATA_DIR / "knowledge_base").mkdir(parents=True, exist_ok=True)
 (DATA_DIR / "call_sessions").mkdir(parents=True, exist_ok=True)
 
+# API Server Configuration
+API_HOST = os.getenv("API_HOST", "0.0.0.0")
+API_PORT = int(os.getenv("PORT", 8080))
+WEBSOCKET_URL = os.getenv("WEBSOCKET_URL", f"ws://{API_HOST}:{API_PORT}/ws")
+
 # Speech Configuration
 SPEECH_LANGUAGE_CODE = "ml-IN"
 SPEECH_VOICE_NAME = "ml-IN-Standard-A"

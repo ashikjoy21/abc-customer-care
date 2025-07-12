@@ -30,6 +30,7 @@ from dotenv import load_dotenv
 from utils import format_customer_info, TranscriptEnhancer
 import numpy as np
 import hashlib
+from starlette.websockets import WebSocketDisconnect
 
 from config import (
     GCP_CREDENTIALS_PATH,
@@ -886,8 +887,8 @@ class ExotelBot:
         self.gemini_lock = asyncio.Lock()  # Add lock for Gemini API calls
         
         # Preload RAG knowledge for common troubleshooting scenarios
-        self.preloaded_rag_data = self._preload_rag_knowledge()
-        logger.info(f"Preloaded {len(self.preloaded_rag_data)} RAG knowledge entries")
+        self._preloaded_rag_data = self._preload_rag_knowledge()
+        logger.info(f"Preloaded {len(self._preloaded_rag_data)} RAG knowledge entries")
         
         # Now reset state which uses the initialized components
         self._reset_state()
@@ -906,6 +907,11 @@ class ExotelBot:
         # Recording related attributes
         self.recording_file = None
         self.recording_path = None
+        
+    @property
+    def preloaded_rag_data(self):
+        """Get the preloaded RAG data"""
+        return self._preloaded_rag_data
 
     async def query_gemini(self, text: str, context: str="", max_tokens: int = None) -> str:
         """Call the global query_gemini function with the bot's chat session and lock"""
@@ -1125,13 +1131,14 @@ class ExotelBot:
             first_chunk = audio_chunks[0]
             self._add_to_recording(first_chunk, is_bot_audio=True)
             
+            # Ensure proper JSON structure for the response
             first_response = {
                 "event": "media",
                 "media": {
                     "payload": base64.b64encode(first_chunk).decode('utf-8')
                 }
             }
-            await self.websocket.send(json.dumps(first_response))
+            await self.websocket.send_json(first_response)
             logger.info(f"Sent first TTS chunk in {time.time() - start_time:.3f}s: {text[:30]}...")
             
             # Process remaining chunks in batches to reduce overhead
@@ -1159,6 +1166,8 @@ class ExotelBot:
             return first_response
         except Exception as e:
             logger.error(f"Error playing message: {e}")
+            import traceback
+            logger.error(f"Play message error traceback: {traceback.format_exc()}")
             return None
 
     async def _send_audio_chunk(self, chunk):
@@ -1174,10 +1183,12 @@ class ExotelBot:
                     "payload": base64.b64encode(chunk).decode('utf-8')
                 }
             }
-            await self.websocket.send(json.dumps(chunk_response))
+            await self.websocket.send_json(chunk_response)
             return True
         except Exception as e:
             logger.error(f"Error sending audio chunk: {e}")
+            import traceback
+            logger.error(f"Audio chunk error traceback: {traceback.format_exc()}")
             return False
 
     async def handle_message(self, data):
@@ -1552,7 +1563,7 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             best_match_score = 0
             
             # Try to find the best match from preloaded data
-            for query_key, rag_content in self.preloaded_rag_data.items():
+            for query_key, rag_content in self._preloaded_rag_data.items():
                 # Calculate a simple score based on term overlap
                 score = 0
                 for term in technical_terms:
@@ -2019,20 +2030,56 @@ Technical Reference (use ONLY as a guide, not a script to follow):
             self.websocket = websocket
             logger.info("WebSocket connection opened. Waiting for messages...")
             
-            async for message in websocket:
+            # Instead of using a while True loop, check connection state
+            while True:
                 try:
-                    if isinstance(message, str):
-                        data = json.loads(message)
+                    # Check if websocket is closed or in a disconnected state
+                    if websocket.client_state == websocket.application_state == 3:  # 3 = DISCONNECTED
+                        logger.info("WebSocket already disconnected, stopping handler")
+                        break
+                    
+                    # Try to receive a message with a timeout
+                    try:
+                        data = await asyncio.wait_for(websocket.receive_json(), timeout=5.0)
                         await self.handle_message(data)
+                    except asyncio.TimeoutError:
+                        # On timeout, check if connection is still alive
+                        try:
+                            # Check if the connection is still valid before pinging
+                            if websocket.client_state != 1 or websocket.application_state != 1:  # 1 = CONNECTED
+                                logger.info("Connection no longer in connected state, stopping handler")
+                                break
+                                
+                            # Try to ping to check connection
+                            pong_waiter = await websocket.ping()
+                            await asyncio.wait_for(pong_waiter, timeout=2.0)
+                            logger.debug("Connection still alive (ping successful)")
+                        except Exception as e:
+                            logger.info(f"Connection appears dead (ping failed): {e}, closing handler")
+                            break
+                    
+                except WebSocketDisconnect:
+                    logger.info("WebSocket disconnected by client")
+                    break
+                except RuntimeError as e:
+                    if "disconnect message has been received" in str(e):
+                        logger.info("WebSocket disconnect message received, stopping handler")
+                        break
                     else:
-                        logger.warning(f"Received non-string message: {type(message)}")
+                        logger.error(f"Runtime error: {e}")
+                        break  # Break on any runtime error to avoid infinite loops
                 except json.JSONDecodeError as e:
                     logger.error(f"Invalid JSON received: {e}")
                 except Exception as e:
                     logger.error(f"Error processing message: {e}")
+                    import traceback
+                    logger.error(f"Error traceback: {traceback.format_exc()}")
+                    # Don't break here, try to continue if possible
                     
         except Exception as e:
             logger.error(f"WebSocket handler error: {e}")
+            import traceback
+            logger.error(f"Handler error traceback: {traceback.format_exc()}")
         finally:
             logger.info(f"[{self.call_id}] WebSocket connection closed")
             self.call_active = False
@@ -2152,25 +2199,39 @@ async def handle_client(websocket):
     bot = ExotelBot()
     try:
         await bot.handle(websocket)
-    except websockets.exceptions.ConnectionClosed:
+    except WebSocketDisconnect:
         logger.info("WebSocket connection closed normally")
     except Exception as e:
         logger.error(f"Error handling client: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
     finally:
         if bot.transcriber:
             bot.transcriber.stop()
 
 async def main():
-    """Start the voicebot server"""
+    """
+    Legacy function to start the standalone WebSocket server.
+    This is kept for backward compatibility but is no longer used directly.
+    The WebSocket handling is now done through FastAPI's WebSocket support.
+    """
+    logger.warning("Call flow main() function called directly. This is deprecated.")
+    logger.warning("WebSockets are now handled through the FastAPI server.")
+    logger.info("Please use 'python api_server.py' to start the server.")
+    
     try:
-        # Start the WebSocket server
-        logger.info("Starting WebSocket server...")
-        async with websockets.serve(handle_client, "0.0.0.0", 8765):
-            logger.info("🚀 Voicebot server started on ws://0.0.0.0:8765")
+        # Start a simple WebSocket server for backward compatibility
+        host = "0.0.0.0"
+        port = 8765
+        
+        logger.info(f"Starting legacy WebSocket server on {host}:{port}...")
+        
+        async with websockets.serve(handle_client, host, port):
+            logger.info(f"🚀 Legacy WebSocket server started on ws://{host}:{port}")
             await asyncio.Future()  # run forever
     except Exception as e:
-        logger.error(f"Error starting server: {e}")
-        raise 
+        logger.error(f"Error starting legacy server: {e}")
+        raise
 
 if __name__ == "__main__":
     # Test the extract_technical_terms function
