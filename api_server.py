@@ -80,6 +80,8 @@ async def websocket_endpoint(websocket: WebSocket):
 # Import and include the Exotel passthru router
 from exotel_passthru import router as exotel_router
 app.include_router(exotel_router, tags=["exotel"])
+from bills import router as bills_router
+app.include_router(bills_router, tags=["bills"])
 
 def start_api_server():
     """Start the FastAPI server."""
