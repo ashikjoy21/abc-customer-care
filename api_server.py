@@ -82,6 +82,8 @@ from exotel_passthru import router as exotel_router
 app.include_router(exotel_router, tags=["exotel"])
 from bills import router as bills_router
 app.include_router(bills_router, tags=["bills"])
+from mgmnt import router as mgmnt_router
+app.include_router(mgmnt_router, tags=["requests"])
 
 def start_api_server():
     """Start the FastAPI server."""
